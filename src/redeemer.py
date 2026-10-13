@@ -1,4 +1,4 @@
-import time
+import re, time
 from . import config as C
 from .utils import log, sleep, rand_ms, shot
 
@@ -6,9 +6,25 @@ def _fill_by_ph(page, placeholders, value):
     for ph in placeholders:
         loc = page.get_by_placeholder(ph).first
         try:
-            loc.wait_for(state="visible", timeout=4000); loc.click(); loc.fill(value); return True
-        except Exception: continue
-    return False
+            loc.wait_for(state="visible", timeout=4000)
+            loc.click()
+            loc.fill(value)
+            return loc                     # trả locator đã fill để blur sau
+        except Exception:
+            continue
+    return None
+
+def _blur(page, loc=None):
+    """Form VNG chỉ commit state khi ô nhập MẤT FOCUS (onBlur) — giống vụ người dùng
+       điện thoại phải 'tap ra khoảng không' thì nút mới hết xám. Playwright fill()
+       không tự blur -> phải blur tay: loc.blur() + click vùng trống của body."""
+    try:
+        if loc is not None: loc.blur()
+    except Exception: pass
+    try:
+        page.mouse.click(2, 2)             # góc trái-trên = vùng padding body, không trúng UI
+    except Exception: pass
+    sleep(rand_ms(200, 500))
 
 def _low(page):
     try: return page.locator("body").inner_text().lower()
@@ -21,8 +37,12 @@ def _find_server_opener(page, region):
     factories = []
     for term in C.SRV_PH.get(region, []) + ["Server"]:
         factories.append(lambda t=term: page.get_by_placeholder(t))
-    factories += [lambda: page.get_by_role("combobox"), lambda: page.locator("select"),
-                  lambda: page.locator("[class*='erver' i], [class*='เซิฟ' i], [class*='máy chủ' i]")]
+    factories += [
+        lambda: page.get_by_role("combobox"),
+        lambda: page.locator("select"),
+        lambda: page.get_by_text(re.compile(r"Server\s*\d|เซิร์ฟเวอร์\s*\d|Máy chủ\s*\d", re.I)),
+        lambda: page.locator("[class*='erver' i], [class*='เซิฟ' i], [class*='máy chủ' i]"),
+    ]
     for f in factories:
         try:
             L = f()
@@ -34,7 +54,7 @@ def _ensure_server(page, region):
     try:
         opener = _find_server_opener(page, region)
         if opener is None:
-            log("server: khong tim thay o server (best-effort bo qua)"); return
+            log("server: khong tim thay o server (best-effort bo qua)"); return False
         opener.click(timeout=3000); sleep(0.8)
         opt = None
         for f in [lambda: page.get_by_role("option", name=C.SRV_OPT_RE),
@@ -46,45 +66,96 @@ def _ensure_server(page, region):
                 if L.count() > 0: opt = L.first; break
             except Exception: continue
         if opt is not None:
-            opt.click(timeout=2500); log("server: da chon (best-effort)"); return
+            opt.click(timeout=2500); log("server: da chon (best-effort)")
+            _blur(page); return True
         try:
             page.keyboard.press("ArrowDown"); sleep(0.3); page.keyboard.press("Enter")
-        except Exception: pass
+            _blur(page); return True
+        except Exception:
+            return False
     except Exception as e:
-        log("server best-effort loi (bo qua):", e)
+        log("server best-effort loi (bo qua):", e); return False
+
+def _wait_enabled(loc, secs=6):
+    end = time.time() + secs
+    while time.time() < end:
+        try:
+            if not loc.is_disabled(): return True
+        except Exception:
+            return True
+        sleep(0.5)
+    return False
 
 def _classify(body_low, region):
-    """Duoc GOI KHI DA BIET 0/1 (that bai). Tra (kind, reason) de webhook + de main quyet chot/retry.
-       Thu tu uu tien: need_login > transient > usage > not_exist > id_error > validation > section > other.
-       (need_login/transient o day = 0/1 kem loi he thong/chua login -> main se coi la RETRY.)"""
-    if _any(body_low, C.NEED_LOGIN[region]):    return "need_login",  "chưa liên kết tài khoản (cần login/storage_state)"
-    if _any(body_low, C.TRANSIENT[region]):     return "transient",   "lỗi hệ thống tạm thời"
-    if _any(body_low, C.FAIL_USAGE[region]):    return "usage_limit", "hết lượt nhập / usage limit"
-    if _any(body_low, C.FAIL_NOTEXIST[region]): return "not_exist",   "không tồn tại / sai mã"
-    if _any(body_low, C.FAIL_IDERROR[region]):  return "id_error",    "ID không tìm thấy/offline — kiểm tra id_user.txt"
-    if _any(body_low, C.FAIL_VALIDATION[region]):return "validation", "thông tin nhập không hợp lệ"
-    if _any(body_low, C.FAIL_SECTION[region]):  return "other",       "thất bại"
+    """Chỉ gọi KHI ĐÃ BIẾT 0/1. Trả (kind, reason) cho webhook + cho main quyết chốt/retry."""
+    if _any(body_low, C.NEED_LOGIN[region]):     return "need_login",  "chưa liên kết tài khoản (cần login/storage_state)"
+    if _any(body_low, C.TRANSIENT[region]):      return "transient",   "lỗi hệ thống tạm thời"
+    if _any(body_low, C.FAIL_USAGE[region]):     return "usage_limit", "hết lượt nhập / usage limit"
+    if _any(body_low, C.FAIL_NOTEXIST[region]):  return "not_exist",   "không tồn tại / sai mã"
+    if _any(body_low, C.FAIL_IDERROR[region]):   return "id_error",    "ID không tìm thấy/offline — kiểm tra id_user.txt"
+    if _any(body_low, C.FAIL_VALIDATION[region]):return "validation",  "thông tin nhập không hợp lệ"
+    if _any(body_low, C.FAIL_SECTION[region]):   return "other",       "thất bại"
     return "other", "thất bại"
 
 def _attempt(page, region, code, uid):
-    """status in success|failure|retry|captcha|unknown.
-       PHAN QUAN = TI SO: 1/1 -> success; 0/1 -> failure (kind/reason tu _classify).
-       retry = loi tam/need_login (khong co ti so hoac 0/1 kem loi he thong) -> khong chot, khong webhook."""
+    """status ∈ success|failure|retry|captcha|unknown.
+       Phán quyền = TỈ SỐ: 1/1 -> success; 0/1 -> failure (kind/reason từ _classify).
+       Lỗi DOM / lỗi tạm / captcha -> RETRY: KHÔNG chốt state, KHÔNG webhook."""
     url = C.URL_VN if region == "VN" else C.URL_TH
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         try: page.wait_for_load_state("networkidle", timeout=8000)
         except Exception: pass
         sleep(rand_ms(1200, 2200))
-        if not _fill_by_ph(page, C.PH_CODE[region], code) or \
-           not _fill_by_ph(page, C.PH_ID[region], uid):
-            shot(page, f"fillfail-{region}")
-            return {"status": "failure", "kind": "dom", "reason": "Không tìm thấy ô nhập code/ID"}
+
+        code_loc = _fill_by_ph(page, C.PH_CODE[region], code)
+        if code_loc is None:
+            shot(page, f"fillfail-code-{region}")
+            return {"status": "retry", "kind": "dom", "reason": "Không tìm thấy ô nhập code"}
+        _blur(page, code_loc)                       # commit code (onBlur)
+
+        id_loc = _fill_by_ph(page, C.PH_ID[region], uid)
+        if id_loc is None:
+            shot(page, f"fillfail-id-{region}")
+            return {"status": "retry", "kind": "dom", "reason": "Không tìm thấy ô nhập ID"}
+        _blur(page, id_loc)                         # commit id (onBlur)
+        sleep(rand_ms(400, 900))
+
         if _any(_low(page), C.CAPTCHA_HINTS):
             shot(page, f"captcha-pre-{region}"); return {"status": "captcha"}
-        _ensure_server(page, region)
+
         btn = page.get_by_role("button", name=C.BTN_REDEEM).or_(page.get_by_text(C.BTN_REDEEM))
-        btn.first.click(timeout=8000)
+        if btn.count() == 0:
+            shot(page, f"nobtn-{region}")
+            return {"status": "retry", "kind": "dom", "reason": "không thấy nút redeem"}
+        first = btn.first
+        try:
+            first.wait_for(state="visible", timeout=10000)
+        except Exception:
+            shot(page, f"nobtn-visible-{region}")
+            return {"status": "retry", "kind": "dom", "reason": "nút redeem không visible"}
+
+        if not _wait_enabled(first, 4):             # blur rồi mà vẫn xám -> thử chọn server
+            log(f"nut van DISABLED [{region}] sau blur -> co gang chon server")
+            _ensure_server(page, region)
+            _blur(page)
+            if not _wait_enabled(first, 6):
+                shot(page, f"disabled-{region}")
+                return {"status": "retry", "kind": "form_invalid",
+                        "reason": "nút redeem vẫn vô hiệu (form chưa hợp lệ)"}
+
+        try:
+            first.scroll_into_view_if_needed(timeout=3000)
+        except Exception: pass
+        try:
+            first.click(timeout=6000)
+        except Exception:
+            try:
+                first.click(timeout=4000, force=True)
+            except Exception:
+                shot(page, f"clickfail-{region}")
+                return {"status": "retry", "kind": "dom", "reason": "click nút redeem thất bại"}
+
         deadline = time.time() + C.REDEEM_POLL_TIMEOUT
         body = ""
         while time.time() < deadline:
@@ -95,20 +166,21 @@ def _attempt(page, region, code, uid):
                 return {"status": "success"}
             if C.RATIO_FAIL in body:
                 kind, reason = _classify(body, region)
-                if kind in ("need_login", "transient"):          # 0/1 nhung do loi he thong/chua login
-                    log(f"RETRY [{region}] {kind}: {reason}"); return {"status": "retry", "kind": kind, "reason": reason}
+                if kind in ("need_login", "transient"):
+                    log(f"RETRY [{region}] {kind}: {reason}")
+                    return {"status": "retry", "kind": kind, "reason": reason}
                 return {"status": "failure", "kind": kind, "reason": reason}
-        # het poll, khong thay ti so -> co phai loi tam/need_login?
         if _any(body, C.NEED_LOGIN[region]):
-            log(f"RETRY [{region}] need_login (khong co modal tong ket)"); return {"status": "retry", "kind": "need_login", "reason": "chưa liên kết tài khoản"}
+            return {"status": "retry", "kind": "need_login", "reason": "chưa liên kết tài khoản"}
         if _any(body, C.TRANSIENT[region]):
-            log(f"RETRY [{region}] transient (khong co modal tong ket)"); return {"status": "retry", "kind": "transient", "reason": "lỗi hệ thống tạm"}
+            return {"status": "retry", "kind": "transient", "reason": "lỗi hệ thống tạm"}
         shot(page, f"unknown-{region}")
-        log(f"UNKNOWN [{region}] (khong thay 0/1 hay 1/1) body[:500]={body[:500]!r}")
+        log(f"UNKNOWN [{region}] body[:500]={body[:500]!r}")
         return {"status": "unknown", "reason": "khong nhan dien duoc phan hoi"}
     except Exception as e:
         shot(page, f"err-{region}")
-        return {"status": "failure", "kind": "exception", "reason": "exception: " + str(e)}
+        log(f"RETRY [{region}] exception: {e.__class__.__name__}")
+        return {"status": "retry", "kind": "exception", "reason": "exception: " + str(e)}
 
 def redeem_for_user(session, region, code, uid):
     for _ in (1, 2):
