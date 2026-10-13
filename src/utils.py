@@ -13,4 +13,4 @@ def shot(page, tag):
         f = os.path.join(d, f"{tag}-{int(time.time())}.png")
         page.screenshot(path=f, full_page=True); log("screenshot:", f)
     except Exception as e:
-        log("screenshot lỗi", e)2
+        log("screenshot lỗi", e)
