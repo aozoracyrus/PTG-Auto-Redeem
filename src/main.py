@@ -20,17 +20,14 @@ DMIN, DMAX  = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", "
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE= int(os.getenv("YT_MAX_PROBE", "5"))
 
+# kind that bai KHONG phu thuoc viec code da sync tren web -> chot ca khi nguon=yt
+PERMANENT_ALWAYS = {"usage_limit", "id_error", "validation", "dom", "exception"}
+
 def is_code_fully_done(code, users, state):
     if not users: return False
     return all(f"{code}|{u['id']}" in state for u in users)
 
 def process_code(session, code, users, state, source):
-    """Chốt state theo nguồn:
-       - success                 -> chốt (mọi nguồn).
-       - failure kind=usage_limit-> chốt (mọi nguồn; hết hạn thật).
-       - failure kind=not_exist  -> web: chốt (nguồn thật); yt: KHÔNG chốt (chưa sync, retry).
-       - failure kind=exception  -> web: chốt; yt: KHÔNG chốt.
-       - captcha / unknown       -> KHÔNG chốt, KHÔNG webhook, retry vòng sau (an toàn tuyệt đối)."""
     pending = [u for u in users if f"{code}|{u['id']}" not in state]
     if not pending: return (0, 0)
     log(f">> code {code} [src={source}]: {len(pending)} user pending")
@@ -38,21 +35,19 @@ def process_code(session, code, users, state, source):
     for u in pending:
         r = redeem_for_user(session, u["region"], code, u["id"])
         st = r["status"]
-        if st == "captcha":
-            log(f"   captcha {u['region']}/{u['id']} -> skip (retry)"); sleep(rand_ms(DMIN, DMAX)); continue
-        if st == "unknown":
-            log(f"   unknown {u['region']}/{u['id']} -> skip (retry; xem log body[:400] để bổ sung chuỗi TH)")
+        if st in ("captcha", "retry", "unknown"):          # <-- retry moi o day
+            log(f"   {st} {u['region']}/{u['id']} -> skip (retry; khong chot, khong webhook)")
             sleep(rand_ms(DMIN, DMAX)); continue
         if st == "success":
             send(msg_success(u["region"], code, u["id"])); state.add(f"{code}|{u['id']}")
         else:  # failure
             kind = r.get("kind", "other")
-            if kind == "usage_limit" or source == "web":
+            if kind in PERMANENT_ALWAYS or source == "web":
                 send(msg_failure(u["region"], code, u["id"], r.get("reason", "unknown")))
                 state.add(f"{code}|{u['id']}")
-            else:  # yt & (not_exist|exception|other) -> chưa sync, giữ retry
+            else:                                          # yt & not_exist -> chua sync, giu retry
                 if kind == "not_exist": ne_hits += 1
-                log(f"   yt-probe {u['region']}/{u['id']} -> '{kind}' (chưa sync, giữ retry)")
+                log(f"   yt-probe {u['region']}/{u['id']} -> '{kind}' (chua sync, giu retry)")
         sleep(rand_ms(DMIN, DMAX))
     remaining = sum(1 for u in users if f"{code}|{u['id']}" not in state)
     return (remaining, ne_hits)
@@ -68,7 +63,7 @@ def force_commit_yt_timeout(code, users, state):
 def main():
     start = time.time()
     log(f"start | REFRESH={REFRESH}s MAXRUN={MAXRUN}s delay={DMIN}-{DMAX}ms "
-        f"YT_COOLDOWN={YT_COOLDOWN}s prefixes={C.CODE_PREFIXES} lang=EN|TH|VN")
+        f"YT_COOLDOWN={YT_COOLDOWN}s prefixes={C.CODE_PREFIXES} lang=EN|TH|VN ratio=0/1|1/1")
     session = BrowserSession()
     try:
         session.open()
@@ -78,14 +73,12 @@ def main():
                 codes_web = fetch_available_codes(session)
                 web_set = set(codes_web)
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
-
                 for c in get_yt_candidates():
                     if c in queue: continue
                     if is_code_fully_done(c, users, state): continue
                     if YQ.add_if_new(queue, c, now):
-                        log(f"YT ALERT: queue+ {c} (chờ {YT_COOLDOWN}s sync)")
+                        log(f"YT ALERT: queue+ {c} (cho {YT_COOLDOWN}s sync)")
                         send(msg_yt_alert(c, YT_COOLDOWN))
-
                 touched = False
                 for c in codes_web:
                     rem, _ = process_code(session, c, users, state, source="web")
@@ -100,12 +93,12 @@ def main():
                     elif ne > 0:
                         p = YQ.bump_probe(queue, c)
                         if p >= YT_MAX_PROBE:
-                            log(f"YT timeout: {c} sau {p} probes -> bỏ cuộc")
+                            log(f"YT timeout: {c} sau {p} probes -> bo cuoc")
                             force_commit_yt_timeout(c, users, state); queue.pop(c, None)
                 if touched:
                     commit_and_push_state(state); YQ.commit_queue(queue)
                 else:
-                    log("không có code mới (web/YT đều cũ hoặc đã nhập hết) -> đợi refresh kỳ sau")
+                    log("khong co code moi (web/YT deu cu hoac da nhap het) -> doi refresh ky sau")
             except Exception as e:
                 log("loop error:", e)
             sleep(REFRESH)
@@ -117,7 +110,7 @@ def main():
         elapsed = time.time() - start
         log(f"end | runtime {int(elapsed)}s")
         if elapsed >= MIN_UPTIME: trigger_next_run()
-        else: log(f"chuỗi DỪNG (runtime {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) — Run workflow lại")
+        else: log(f"chuoi DUNG (runtime {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) — Run workflow lai")
 
 if __name__ == "__main__":
     main()
