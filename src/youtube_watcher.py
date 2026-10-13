@@ -23,50 +23,35 @@ def resolve_channel_id():
     cid = _read_cached_cid()
     if cid: return cid
     try:
-        r = requests.get(f"https://www.youtube.com/{C.YT_HANDLE}/videos",
-                         headers={"User-Agent": UA}, timeout=15)   # đúng tab Videos
+        r = requests.get(f"https://www.youtube.com/{C.YT_HANDLE}/videos", headers={"User-Agent": UA}, timeout=15)
         m = re.search(r'"channelId":"(UC[\w-]{20,})"', r.text) or \
             re.search(r'"externalId":"(UC[\w-]{20,})"', r.text)
         if m:
             _write_cached_cid(m.group(1)); log("resolved channel id:", m.group(1)); return m.group(1)
-        log("YT: không resolve được channel id từ HTML")
+        log("YT: không resolve được channel id từ HTML (/videos)")
     except Exception as e:
         log("YT resolve lỗi:", e)
     return None
 
 def get_yt_candidates():
-    """Quét N video mới nhất (N = YT_TOP_ENTRIES, mặc định 15 = gần hết feed).
-       Log rõ từng bước để đọc log là biết vì sao có/không có code."""
     cid = resolve_channel_id()
     if not cid:
-        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này.")
+        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này (bot vẫn chạy web/API-only).")
         return []
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"
     codes = []
     try:
         r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
-        if r.status_code != 200:
-            log("YT RSS HTTP", r.status_code); return []
-        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
-        window = entries[: C.YT_TOP_ENTRIES]
-        log(f"YT scan {len(window)}/{len(entries)} video mới nhất")
-        kw_hits = 0
-        for ent in window:
+        if r.status_code != 200: log("YT RSS HTTP", r.status_code); return []
+        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)[: C.YT_TOP_ENTRIES]
+        for ent in entries:
             tm = re.search(r"<title>(.*?)</title>", ent, re.DOTALL)
             if not tm: continue
             title = html.unescape(tm.group(1)).strip()
-            if not C.YT_KEYWORD_RE.search(title):
-                continue                      # video không có CODE CHUNG -> im lặng bỏ
-            kw_hits += 1
+            if not C.YT_KEYWORD_RE.search(title): continue
             found = code_sau_keyword_yt(title)
-            if found:
-                log(f'YT hit: "{title[:80]}" -> {found}')
-                codes.extend(found)
-            else:
-                log(f'YT: có "CODE CHUNG" nhưng không trích được mã (token sau không '
-                    f'mở đầu prefix {C.CODE_PREFIXES}?): "{title[:80]}"')
-        if kw_hits == 0:
-            log("YT: không video nào trong cửa sổ có 'CODE CHUNG'")
+            if found: log(f'YT hit: "{title[:90]}" -> {found}'); codes.extend(found)
+            else: log(f'YT: có "CODE CHUNG" nhưng không trích được code (token sau không mở đầu prefix {C.CODE_PREFIXES}?): "{title[:90]}"')
     except Exception as e:
         log("YT watcher lỗi:", e)
     seen, out = set(), []
