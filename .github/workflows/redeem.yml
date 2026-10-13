@@ -1,11 +1,11 @@
-name: PTG Auto Redeem (Camoufox + YouTube watcher)
+name: PTG Auto Redeem (YouTube -> VN)
 
 on:
-  workflow_dispatch: {}          # KHÔNG schedule — bật/tắt bằng token
+  workflow_dispatch: {}          # bật/tắt bằng token, không cron
 
 concurrency:
   group: ptg-redeem
-  cancel-in-progress: false      # 1 browser duy nhất, không song song -> không spam
+  cancel-in-progress: false      # 1 browser duy nhất
 
 permissions:
   contents: write                # push code_da_nhap.txt + yt_queue.json
@@ -14,15 +14,15 @@ permissions:
 jobs:
   redeem:
     runs-on: ubuntu-latest
-    timeout-minutes: 360         # trần cứng; script tự thoát ở 345' để kịp nối tiếp
+    timeout-minutes: 360         # trần cứng; script tự thoát ở 345'
     env:
-      REFRESH_INTERVAL: "60"     # giây giữa 2 lần RELOAD trang (30 hoặc 60)
-      MAX_RUNTIME:      "20700"  # 345 phút = 20700s (< 360) -> buffer 15'
-      MIN_UPTIME:       "120"    # guard chống fail-loop
-      DELAY_MIN:        "15000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP (15s)
-      DELAY_MAX:        "30000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP (30s)
-      YT_COOLDOWN:      "60"     # giây chờ server sync trước khi probe code YT
-      YT_MAX_PROBE:     "5"      # số lần probe code-YT-chưa-sync trước khi bỏ cuộc
+      REFRESH_INTERVAL: "60"     # giây giữa 2 lần hỏi YouTube
+      MAX_RUNTIME:      "20700"  # 345 phút (< 360) -> buffer 15'
+      MIN_UPTIME:       "120"
+      DELAY_MIN:        "15000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP
+      DELAY_MAX:        "30000"
+      YT_COOLDOWN:      "60"     # giây chờ server sync sau khi YT phát hiện
+      YT_MAX_PROBE:     "5"
       WORKFLOW_FILE:    "redeem.yml"
       DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
       GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
@@ -30,31 +30,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: true }
-
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-
       - name: Cache camoufox data
         uses: actions/cache@v4
         with:
           path: ~/.local/share/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: camoufox-${{ runner.os }}-
-
       - name: Install python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Install playwright firefox deps
         run: python -m playwright install-deps firefox || true
-
       - name: Fetch camoufox engine
         run: python -m camoufox fetch
-
-      - name: Run loop (web + YT cooldown + self-trigger ở finally)
+      - name: Run loop (YT -> VN + self-trigger ở finally)
         run: python src/main.py
-
       - name: Upload screenshots on failure
         if: always()
         uses: actions/upload-artifact@v4
