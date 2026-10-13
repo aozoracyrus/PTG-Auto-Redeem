@@ -27,7 +27,6 @@ def _low(page):
 def _any(b, needles):
     return any(str(n).lower() in b for n in needles)
 
-# ===== COOKIE CONSENT =====
 def _cookie_present(page):
     try:
         return page.get_by_text("chúng tôi sử dụng cookie", exact=False).count() > 0
@@ -63,7 +62,6 @@ def _dismiss_cookie(page):
     except Exception:
         return False
 
-# ===== ĐỌC MODAL + DUMP HTML ĐỂ DEBUG =====
 _DIALOG_SEL = (
     "[role='dialog'], [role='alertdialog'], [role='alert'], [aria-modal='true'], "
     "dialog, [class*='modal' i], [class*='dialog' i], [class*='popup' i], "
@@ -73,8 +71,6 @@ _DIALOG_TEXT_NEEDLES = ["hoàn tất nhập mã", "đã hoàn tất", "thành c�
                         "nhập thành công", "thất bại", "failed", "failure"]
 
 def _read_dialog(page):
-    """Trả (text_lowercase, count, html_snippet_rỗng_text). html_snippet giúp biết
-       dialog rỗng là placeholder div hay content chưa hydrate."""
     try:
         locs = page.locator(_DIALOG_SEL)
         n = locs.count()
@@ -85,7 +81,6 @@ def _read_dialog(page):
                 txt = locs.nth(i).inner_text()
                 low = txt.lower()
                 if not txt.strip():
-                    # lưu HTML của dialog rỗng để debug
                     if not empty_snippet:
                         try:
                             html = locs.nth(i).evaluate("el => el.outerHTML")
@@ -103,15 +98,24 @@ def _read_dialog(page):
         return f"err:{e}", -1, ""
 
 def _find_server_opener(page):
+    """Tìm ô server bằng nhiều selector: placeholder, combobox, select, label text."""
     factories = []
+    # Placeholder
     for term in C.SRV_PH:
         factories.append(lambda t=term: page.get_by_placeholder(t))
+    # Role
     factories += [
         lambda: page.get_by_role("combobox"),
         lambda: page.locator("select"),
-        lambda: page.get_by_text(re.compile(r"Server\s*\d|Máy chủ\s*\d", re.I)),
-        lambda: page.locator("[class*='erver' i], [class*='máy chủ' i]"),
     ]
+    # Text trong option
+    factories.append(lambda: page.get_by_text(re.compile(r"Server\s*\d|Máy chủ\s*\d", re.I)))
+    # Class name heuristic
+    factories.append(lambda: page.locator("[class*='erver' i], [class*='máy chủ' i]"))
+    # Label text "Máy chủ" / "Server" -> tìm input gần đó
+    factories.append(lambda: page.locator("label:has-text('Máy chủ'), label:has-text('Server') + *"))
+    factories.append(lambda: page.locator("text='Máy chủ' >> xpath=.. >> *"))
+    
     for f in factories:
         try:
             L = f()
@@ -123,7 +127,8 @@ def _ensure_server(page):
     try:
         opener = _find_server_opener(page)
         if opener is None:
-            log("server: khong tim thay o server (best-effort bo qua)"); return False
+            log("server: KHÔNG TÌM THẤY ô server (form có thể không submit!)"); return False
+        log(f"server: tìm thấy opener")
         opener.click(timeout=3000); sleep(0.8)
         opt = None
         for f in [lambda: page.get_by_role("option", name=C.SRV_OPT_RE),
@@ -135,15 +140,33 @@ def _ensure_server(page):
                 if L.count() > 0: opt = L.first; break
             except Exception: continue
         if opt is not None:
-            opt.click(timeout=2500); log("server: da chon (best-effort)")
+            opt.click(timeout=2500); log("server: đã chọn option")
             _blur(page); return True
+        # Fallback: phím mũi tên
         try:
             page.keyboard.press("ArrowDown"); sleep(0.3); page.keyboard.press("Enter")
-            _blur(page); return True
+            log("server: fallback phím"); _blur(page); return True
         except Exception:
             return False
     except Exception as e:
-        log("server best-effort loi (bo qua):", e); return False
+        log("server lỗi:", e); return False
+
+def _dump_form_state(page):
+    """Dump giá trị các ô input để debug form không submit."""
+    try:
+        inputs = page.locator("input, select, textarea").all()
+        log(f"FORM STATE: {len(inputs)} input elements")
+        for i, inp in enumerate(inputs[:10]):  # chỉ dump 10 cái đầu
+            try:
+                tag = inp.evaluate("el => el.tagName")
+                ph = inp.evaluate("el => el.placeholder || ''")
+                val = inp.evaluate("el => el.value || ''")
+                name = inp.evaluate("el => el.name || el.id || ''")
+                log(f"  input[{i}]: {tag} name={name!r} placeholder={ph!r} value={val[:50]!r}")
+            except Exception:
+                pass
+    except Exception as e:
+        log(f"FORM STATE dump lỗi: {e}")
 
 def _wait_enabled(loc, secs=6):
     end = time.time() + secs
@@ -159,12 +182,12 @@ def _classify(body_low):
     if _any(body_low, C.TRANSIENT):      return "transient",   "lỗi hệ thống tạm thời"
     if _any(body_low, C.FAIL_USAGE):     return "usage_limit", "hết lượt nhập / usage limit"
     if _any(body_low, C.FAIL_NOTEXIST):  return "not_exist",   "không tồn tại / sai mã"
-    if _any(body_low, C.FAIL_IDERROR):   return "id_error",    "ID không tìm thấy/offline — kiểm tra id_user.txt"
+    if _any(body_low, C.FAIL_IDERROR):   return "id_error",    "ID không tìm thấy/offline"
     if _any(body_low, C.FAIL_VALIDATION):return "validation",  "thông tin nhập không hợp lệ"
     if _any(body_low, C.FAIL_SECTION):   return "other",       "thất bại"
     return "other", "thất bại"
 
-def _poll_modal(page, timeout):
+def _poll_modal(page, timeout, network_log):
     deadline = time.time() + timeout
     while time.time() < deadline:
         sleep(C.REDEEM_POLL_STEP)
@@ -191,47 +214,59 @@ def _poll_modal(page, timeout):
     body_full = ""
     try: body_full = page.locator("body").inner_text()
     except Exception: pass
-    log(f"POLL_TIMEOUT: url={page.url} | dialog_count={d_count} | "
-        f"dialog_text[:400]={d_text[:400]!r}")
-    if empty_html:
-        log(f"EMPTY_DIALOG_HTML[:500]={empty_html!r}")       # <-- MỚI: biết div rỗng là gì
-    log(f"body[:2000]={body_full[:2000]!r}")
+    log(f"POLL_TIMEOUT: dialog_count={d_count} | dialog_text[:200]={d_text[:200]!r}")
+    if empty_html and "__next-route-announcer__" not in empty_html:
+        log(f"EMPTY_DIALOG_HTML[:500]={empty_html!r}")
+    log(f"body[:1000]={body_full[:1000]!r}")
+    log(f"NETWORK requests count: {len(network_log)}")
+    if network_log:
+        for line in network_log[-10:]:  # 10 request cuối
+            log(f"  {line}")
     return None
 
-def _click_with_fallbacks(loc, first):
-    """Thử click theo 4 cách: thường -> force -> JS click (bubbles) -> dispatch click event."""
-    try: first.scroll_into_view_if_needed(timeout=3000)
-    except Exception: pass
-    # C1: click thường
+def _submit_form_js(page):
+    """Thử submit form bằng JavaScript nếu click nút không trigger request."""
     try:
-        first.click(timeout=6000); return True, "normal"
-    except Exception: pass
-    # C2: force click
-    try:
-        first.click(timeout=4000, force=True); return True, "force"
-    except Exception: pass
-    # C3: JS click với bubbles+composed (React thường gắn handler trên wrapper)
-    try:
-        ok = first.evaluate("""el => {
-            const ev = new MouseEvent('click', {bubbles:true, cancelable:true, composed:true, view:window});
-            return el.dispatchEvent(ev);
+        result = page.evaluate("""() => {
+            // Tìm form element
+            const forms = document.querySelectorAll('form');
+            if (forms.length === 0) return {error: 'no-form'};
+            const form = forms[0];
+            
+            // Tìm nút submit
+            const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) {
+                submitBtn.click();
+                return {method: 'submit-btn-click'};
+            }
+            
+            // Tìm nút "Nhập code" bất kỳ
+            const allBtns = form.querySelectorAll('button');
+            for (const btn of allBtns) {
+                if (btn.textContent.includes('Nhập code') || btn.textContent.includes('Redeem')) {
+                    btn.click();
+                    return {method: 'redeem-btn-click'};
+                }
+            }
+            
+            // Fallback: submit form trực tiếp
+            form.submit();
+            return {method: 'form-submit'};
         }""")
-        return True, f"js-bubbles(ok={ok})"
+        log(f"JS submit: {result}")
+        return True
     except Exception as e:
-        log(f"JS click fail: {e}")
-    # C4: dispatch_event (Playwright native)
-    try:
-        first.dispatch_event("click"); return True, "dispatch"
-    except Exception:
-        return False, "all-failed"
+        log(f"JS submit lỗi: {e}")
+        return False
 
 def _attempt(page, code, uid):
-    network_log = []  # lưu request/response khi bấm nút
+    network_log = []
+    console_errors = []
 
     def _on_response(response):
         try:
             url = response.url
-            if "redeem" in url or "verify" in url or "use" in url or "giftcode" in url:
+            if any(kw in url.lower() for kw in ["redeem", "verify", "use", "giftcode", "api/"]):
                 body = ""
                 try: body = response.text()[:500]
                 except Exception: body = "<no-body>"
@@ -239,8 +274,16 @@ def _attempt(page, code, uid):
         except Exception:
             pass
 
+    def _on_console(msg):
+        try:
+            if msg.type == "error":
+                console_errors.append(msg.text[:200])
+        except Exception:
+            pass
+
     try:
         page.on("response", _on_response)
+        page.on("console", _on_console)
 
         page.goto(C.URL_VN, wait_until="domcontentloaded", timeout=45000)
         try: page.wait_for_load_state("networkidle", timeout=8000)
@@ -264,6 +307,14 @@ def _attempt(page, code, uid):
 
         _dismiss_cookie(page)
 
+        # Chọn server
+        _ensure_server(page)
+        _blur(page)
+        sleep(rand_ms(500, 1000))
+
+        # Dump form state trước khi click
+        _dump_form_state(page)
+
         btn = page.get_by_role("button", name=C.BTN_REDEEM).or_(page.get_by_text(C.BTN_REDEEM))
         if btn.count() == 0:
             shot(page, "nobtn"); return {"status": "retry", "kind": "dom", "reason": "không thấy nút Nhập code"}
@@ -273,32 +324,43 @@ def _attempt(page, code, uid):
             shot(page, "nobtn-visible"); return {"status": "retry", "kind": "dom", "reason": "nút Nhập code không visible"}
 
         if not _wait_enabled(first, 4):
-            log("nut van DISABLED sau blur -> co gang chon server")
-            _ensure_server(page); _blur(page)
-            if not _wait_enabled(first, 6):
-                shot(page, "disabled")
-                return {"status": "retry", "kind": "form_invalid", "reason": "nút Nhập code vẫn vô hiệu"}
+            log("nút vẫn DISABLED sau khi chọn server")
+            shot(page, "disabled")
+            return {"status": "retry", "kind": "form_invalid", "reason": "nút Nhập code vẫn vô hiệu"}
 
-        # CLICK với 4 fallback
-        ok, how = _click_with_fallbacks(btn, first)
-        log(f"click nút: ok={ok}, method={how}")
-        if not ok:
-            shot(page, "clickfail")
-            return {"status": "retry", "kind": "dom", "reason": "click nút Nhập code thất bại (4 cách)"}
+        # Click nút
+        try: first.scroll_into_view_if_needed(timeout=3000)
+        except Exception: pass
+        try:
+            first.click(timeout=6000)
+            log("click nút: ok=True, method=normal")
+        except Exception:
+            try:
+                first.click(timeout=4000, force=True)
+                log("click nút: ok=True, method=force")
+            except Exception:
+                shot(page, "clickfail")
+                return {"status": "retry", "kind": "dom", "reason": "click nút thất bại"}
 
-        result = _poll_modal(page, 30)
+        # Chờ 3s xem có request API nào không
+        sleep(3)
+        if not network_log:
+            log("KHÔNG có request API sau 3s -> thử submit form bằng JS")
+            _submit_form_js(page)
+            sleep(3)
 
-        # Log network nếu có
-        if network_log:
-            for line in network_log[:5]:
-                log(f"NETWORK: {line}")
-        else:
-            log("NETWORK: KHÔNG có request nào liên quan redeem/verify/use/giftcode "
-                "(form có thể không submit, hoặc API endpoint khác)")
+        # Poll modal
+        result = _poll_modal(page, 30, network_log)
+
+        # Log console errors
+        if console_errors:
+            log(f"CONSOLE ERRORS: {len(console_errors)} lỗi")
+            for err in console_errors[:5]:
+                log(f"  {err}")
 
         if result is None:
             shot(page, "unknown")
-            return {"status": "unknown", "reason": "không nhận diện được phản hồi"}
+            return {"status": "unknown", "reason": "form không submit hoặc modal không render"}
         status, kind, reason = result
         if status == "captcha":
             shot(page, "captcha-post"); return {"status": "captcha"}
@@ -313,6 +375,8 @@ def _attempt(page, code, uid):
         return {"status": "retry", "kind": "exception", "reason": "exception: " + str(e)}
     finally:
         try: page.remove_listener("response", _on_response)
+        except Exception: pass
+        try: page.remove_listener("console", _on_console)
         except Exception: pass
 
 def redeem_for_user(session, code, uid):
