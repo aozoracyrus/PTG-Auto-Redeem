@@ -16,10 +16,18 @@ def _low(page):
 def _any(low_body, needles):
     return any(str(n).lower() in low_body for n in needles)
 
+def _reason(body_low, region):
+    """Đọc text ĐỎ để suy lí do cho webhook failure. KHÔNG ảnh hưởng thắng/thua."""
+    if _any(body_low, C.FAIL_USAGE[region]):
+        return "usage_limit", "hết lượt nhập / usage limit"
+    if _any(body_low, C.FAIL_NOTEXIST[region]):
+        return "not_exist", "không tồn tại / does not exist"
+    return "other", "thất bại"
+
 def _attempt(page, region, code, uid):
-    """status ∈ success|failure|captcha|unknown. code->ô CODE, uid->ô ID (đúng chiều).
-       Phân loại ưu tiên: captcha > success > usage_limit > not_exist > unknown.
-       Mọi so khớp dùng LOWERCASE + list đa ngôn ngữ [EN]|[TH]|[VN]."""
+    """status ∈ success|failure|captcha|unknown.
+       Thắng/thua CHỈ nhìn tỉ số 1/1 vs 0/1 (dễ hiểu, không glyph-risk, không dịch).
+       Text đỏ chỉ quyết định 'kind'/'reason' cho webhook."""
     url = C.URL_VN if region == "VN" else C.URL_TH
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -29,7 +37,7 @@ def _attempt(page, region, code, uid):
         if not _fill_by_ph(page, C.PH_CODE[region], code) or \
            not _fill_by_ph(page, C.PH_ID[region], uid):
             shot(page, f"fillfail-{region}")
-            return {"status": "failure", "reason": "Không tìm thấy ô nhập code/ID (DOM/wording đổi?)"}
+            return {"status": "failure", "kind": "dom", "reason": "Không tìm thấy ô nhập code/ID"}
         body0 = _low(page)
         if _any(body0, C.CAPTCHA_HINTS):
             shot(page, f"captcha-pre-{region}"); return {"status": "captcha"}
@@ -39,22 +47,21 @@ def _attempt(page, region, code, uid):
         body = _low(page)
         if _any(body, C.CAPTCHA_HINTS):
             shot(page, f"captcha-post-{region}"); return {"status": "captcha"}
-        if _any(body, C.OK[region]):
+        # ===== 2 DÒNG VÀNG =====
+        if C.RATIO_FAIL in body:                      # 0/1 -> THẤT BẠI
+            kind, reason = _reason(body, region)
+            return {"status": "failure", "kind": kind, "reason": reason}
+        if C.RATIO_OK in body:                        # 1/1 -> THÀNH CÔNG
             return {"status": "success"}
-        if _any(body, C.FAIL_USAGE[region]):
-            return {"status": "failure", "kind": "usage_limit", "reason": "usage limit"}
-        if _any(body, C.FAIL_NOTEXIST[region]):
-            return {"status": "failure", "kind": "not_exist", "reason": "not exist"}
-        # unknown: in raw body để người dùng lấy chuỗi TH thật, rồi thêm vào config.OK/FAIL_*
+        # ===== lưới cuối =====
         shot(page, f"unknown-{region}")
-        log(f"UNKNOWN [{region}] body[:400]={body[:400]!r}")   # <- đọc log này để hiệu chỉnh TH
+        log(f"UNKNOWN [{region}] (không thấy 0/1 hay 1/1) body[:400]={body[:400]!r}")
         return {"status": "unknown", "reason": "không nhận diện được phản hồi"}
     except Exception as e:
         shot(page, f"err-{region}")
         return {"status": "failure", "kind": "exception", "reason": "exception: " + str(e)}
 
 def redeem_for_user(session, region, code, uid):
-    """captcha -> restart browser, retry 1 lần; vẫn captcha -> 'captcha' (main SKIP)."""
     for _ in (1, 2):
         page = session.new_temp_page()
         try: r = _attempt(page, region, code, uid)
