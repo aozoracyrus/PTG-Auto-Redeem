@@ -22,12 +22,6 @@ YT_MAX_PROBE= int(os.getenv("YT_MAX_PROBE", "5"))
 STATE_FILES = ["code_da_nhap.txt", "yt_queue.json", "id_code_loi.txt"]
 
 def process_code(session, code, users, state, mem, errs):
-    """Nhập code cho mọi ID chưa terminal.
-       - success        -> webhook success; nếu cặp từng nằm trong sổ lỗi thì XOÁ dòng đó.
-       - failure terminal -> webhook failure + GHI 'CODE|ID' vào id_code_loi.txt.
-       - not_exist      -> retry (chưa sync), KHÔNG ghi sổ lỗi.
-       - captcha/retry/unknown -> skip, không ghi gì.
-       Khi TẤT CẢ ID terminal -> state.add(code) = 1 dòng trong code_da_nhap.txt."""
     term = mem.setdefault(code, set())
     pending = [uid for uid in users if uid not in term]
     if not pending: return 0, 0
@@ -54,7 +48,7 @@ def process_code(session, code, users, state, mem, errs):
             else:
                 send(msg_failure(code, uid, r.get("reason", "unknown")))
                 term.add(uid)
-                errs.add(pair)                      # <-- GHI SỔ LỖI
+                errs.add(pair)
                 log(f"   {pair}: that bai -> ghi vao id_code_loi.txt")
         sleep(rand_ms(DMIN, DMAX))
     if users and all(uid in term for uid in users):
@@ -68,8 +62,8 @@ def main():
     log(f"start | MODE=YouTube->VN | REFRESH={REFRESH}s MAXRUN={MAXRUN}s "
         f"delay={DMIN}-{DMAX}ms YT_COOLDOWN={YT_COOLDOWN}s prefixes={C.CODE_PREFIXES}")
     session = BrowserSession()
-    mem  = {}                    # code -> set(ID terminal) trong run
-    errs = load_errors()         # sổ lỗi CODE|ID (giữ suốt run, push khi đổi)
+    mem  = {}
+    errs = load_errors()
     try:
         session.open()
         while time.time() - start < MAXRUN:
@@ -77,17 +71,23 @@ def main():
                 now = time.time()
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
 
-                for c in get_yt_candidates():
-                    if c in state or c in queue: continue
+                cands = get_yt_candidates()
+                for c in cands:
+                    if c in state:
+                        log(f"YT code {c} đã xong (nằm trong code_da_nhap.txt) -> bỏ qua")
+                        continue
+                    if c in queue:
+                        continue                       # đang chờ cooldown / đang probe
                     if YQ.add_if_new(queue, c, now):
-                        log(f"YT ALERT: queue+ {c} (cho {YT_COOLDOWN}s sync)")
+                        log(f"YT ALERT: queue+ {c} (chờ {YT_COOLDOWN}s sync)")
                         send(msg_yt_alert(c, YT_COOLDOWN))
 
                 touched = False
                 for c in list(queue.keys()):
                     if c in state:
                         queue.pop(c, None); continue
-                    if not YQ.eligible(queue, c, now, YT_COOLDOWN): continue
+                    if not YQ.eligible(queue, c, now, YT_COOLDOWN):
+                        continue                       # chưa đủ cooldown
                     rem, ne = process_code(session, c, users, state, mem, errs)
                     touched = True
                     if c in state or (rem == 0 and ne == 0):
@@ -100,14 +100,15 @@ def main():
                                 if uid not in mem.get(c, set()):
                                     send(msg_failure(c, uid,
                                         f"YT code không sync sau {YT_MAX_PROBE} lần thử (bỏ qua)"))
-                                    errs.add(f"{c}|{uid}")          # <-- ghi sổ lỗi khi bỏ cuộc
+                                    errs.add(f"{c}|{uid}")
                             state.add(c); queue.pop(c, None)
                 if touched:
                     write_state(state); write_errors(errs); YQ.save_queue(queue)
                     commit_paths(STATE_FILES,
                                  f"chore(state): {len(state)} done / {len(errs)} loi")
                 else:
-                    log("chua co code moi tu YouTube (hoac da xong het) -> doi refresh ky sau")
+                    log(f"vòng này: {len(cands)} code từ YT, {len(queue)} code đang chờ "
+                        f"cooldown/probe -> chưa có gì mới, đợi refresh kỳ sau")
             except Exception as e:
                 log("loop error:", e)
             sleep(REFRESH)
