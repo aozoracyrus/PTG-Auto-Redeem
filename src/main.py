@@ -20,8 +20,9 @@ DMIN, DMAX  = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", "
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE= int(os.getenv("YT_MAX_PROBE", "5"))
 
-# kind that bai KHONG phu thuoc viec code da sync tren web -> chot ca khi nguon=yt
-PERMANENT_ALWAYS = {"usage_limit", "id_error", "validation", "dom", "exception"}
+# kind thất bại VĨNH VIỄN (chốt cả khi nguồn=yt). dom/exception/form_invalid KHÔNG ở đây
+# -> chúng là retry, để selector hỏng không đốt code vào state.
+PERMANENT_ALWAYS = {"usage_limit", "id_error", "validation"}
 
 def is_code_fully_done(code, users, state):
     if not users: return False
@@ -35,17 +36,17 @@ def process_code(session, code, users, state, source):
     for u in pending:
         r = redeem_for_user(session, u["region"], code, u["id"])
         st = r["status"]
-        if st in ("captcha", "retry", "unknown"):          # <-- retry moi o day
+        if st in ("captcha", "retry", "unknown"):
             log(f"   {st} {u['region']}/{u['id']} -> skip (retry; khong chot, khong webhook)")
             sleep(rand_ms(DMIN, DMAX)); continue
         if st == "success":
             send(msg_success(u["region"], code, u["id"])); state.add(f"{code}|{u['id']}")
-        else:  # failure
+        else:
             kind = r.get("kind", "other")
             if kind in PERMANENT_ALWAYS or source == "web":
                 send(msg_failure(u["region"], code, u["id"], r.get("reason", "unknown")))
                 state.add(f"{code}|{u['id']}")
-            else:                                          # yt & not_exist -> chua sync, giu retry
+            else:
                 if kind == "not_exist": ne_hits += 1
                 log(f"   yt-probe {u['region']}/{u['id']} -> '{kind}' (chua sync, giu retry)")
         sleep(rand_ms(DMIN, DMAX))
