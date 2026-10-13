@@ -1,34 +1,25 @@
 import os, subprocess
 from .utils import log
 
-STATE  = lambda: os.path.join(os.getcwd(), "code_da_nhap.txt")
-ERRORS = lambda: os.path.join(os.getcwd(), "id_code_loi.txt")
+STATE = lambda: os.path.join(os.getcwd(), "code_da_nhap.txt")
 
 def load_state():
-    """State = tập CODE đã xong hết ID (mỗi code 1 dòng)."""
     fp = STATE()
     if not os.path.exists(fp): return set()
     return {l.strip() for l in open(fp, encoding="utf-8") if l.strip()}
 
-def write_state(s):
+def _write_state(s):
     lines = sorted(s)
     open(STATE(), "w", encoding="utf-8").write("\n".join(lines) + ("\n" if lines else ""))
 
-def load_errors():
-    """Sổ lỗi = tập 'CODE|ID' của các cặp thất bại."""
-    fp = ERRORS()
-    if not os.path.exists(fp): return set()
-    return {l.strip() for l in open(fp, encoding="utf-8") if l.strip()}
-
-def write_errors(s):
-    lines = sorted(s)
-    open(ERRORS(), "w", encoding="utf-8").write("\n".join(lines) + ("\n" if lines else ""))
+def commit_and_push_state(s):
+    _write_state(s)
+    commit_paths(["code_da_nhap.txt"], f"chore(state): redeemed {len(s)} entries")
 
 def commit_paths(paths, message):
-    """Commit + push danh sách file bằng GITHUB_TOKEN; không đổi thì bỏ qua."""
     token, repo = os.getenv("GITHUB_TOKEN"), os.getenv("GITHUB_REPOSITORY")
     if not token or not repo:
-        log("KHÔNG push (thiếu GITHUB_TOKEN/GITHUB_REPOSITORY)"); return
+        log("KHONG push (thieu GITHUB_TOKEN/GITHUB_REPOSITORY)"); return
     ref = os.getenv("GITHUB_REF_NAME", "main")
     def run(cmd): subprocess.run(cmd, shell=True, cwd=os.getcwd(), check=False)
     try:
@@ -39,9 +30,9 @@ def commit_paths(paths, message):
         dirty = subprocess.run('git status --porcelain ' + ' '.join(paths),
                                shell=True, capture_output=True, text=True).stdout.strip()
         if not dirty:
-            log("state không đổi, không commit"); return
+            log("state khong doi, khong commit"); return
         run(f'git commit -m "{message}"')
         run(f'git push origin HEAD:{ref}')
-        log("đã push:", ", ".join(paths))
+        log("da push:", ", ".join(paths))
     except Exception as e:
-        log("push lỗi:", e)
+        log("push loi:", e)
