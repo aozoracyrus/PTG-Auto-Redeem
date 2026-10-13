@@ -18,7 +18,6 @@ def commit_queue(q):
     commit_paths(["yt_queue.json"], f"chore(yt-queue): {len(q)} pending")
 
 def add_if_new(q, code, now):
-    """Thêm code vào queue nếu chưa có. Trả True nếu vừa thêm (để alert 1 lần)."""
     if code in q: return False
     q[code] = {"first_seen": now, "probes": 0}
     return True
