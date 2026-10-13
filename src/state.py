@@ -1,23 +1,31 @@
 import os, subprocess
 from .utils import log
 
-STATE = lambda: os.path.join(os.getcwd(), "code_da_nhap.txt")
+STATE  = lambda: os.path.join(os.getcwd(), "code_da_nhap.txt")
+ERRORS = lambda: os.path.join(os.getcwd(), "id_code_loi.txt")
 
 def load_state():
+    """State = tập CODE đã xong hết ID (mỗi code 1 dòng)."""
     fp = STATE()
     if not os.path.exists(fp): return set()
     return {l.strip() for l in open(fp, encoding="utf-8") if l.strip()}
 
-def _write_state(s):
+def write_state(s):
     lines = sorted(s)
     open(STATE(), "w", encoding="utf-8").write("\n".join(lines) + ("\n" if lines else ""))
 
-def commit_and_push_state(s):
-    _write_state(s)
-    commit_paths(["code_da_nhap.txt"], f"chore(state): redeemed {len(s)} entries")
+def load_errors():
+    """Sổ lỗi = tập 'CODE|ID' của các cặp thất bại."""
+    fp = ERRORS()
+    if not os.path.exists(fp): return set()
+    return {l.strip() for l in open(fp, encoding="utf-8") if l.strip()}
+
+def write_errors(s):
+    lines = sorted(s)
+    open(ERRORS(), "w", encoding="utf-8").write("\n".join(lines) + ("\n" if lines else ""))
 
 def commit_paths(paths, message):
-    """Commit + push danh sách file state bằng GITHUB_TOKEN (runner ephemeral -> phải push)."""
+    """Commit + push danh sách file bằng GITHUB_TOKEN; không đổi thì bỏ qua."""
     token, repo = os.getenv("GITHUB_TOKEN"), os.getenv("GITHUB_REPOSITORY")
     if not token or not repo:
         log("KHÔNG push (thiếu GITHUB_TOKEN/GITHUB_REPOSITORY)"); return
