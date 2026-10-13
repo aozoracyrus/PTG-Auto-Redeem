@@ -35,7 +35,8 @@ def resolve_channel_id():
     return None
 
 def get_yt_candidates():
-    """RSS feed = chỉ video tab Videos. Title chứa 'CODE CHUNG' -> trích mã đứng sau."""
+    """Quét N video mới nhất (N = YT_TOP_ENTRIES, mặc định 15 = gần hết feed).
+       Log rõ từng bước để đọc log là biết vì sao có/không có code."""
     cid = resolve_channel_id()
     if not cid:
         log("YT watcher: CHƯA có channel id -> bỏ qua vòng này.")
@@ -46,18 +47,26 @@ def get_yt_candidates():
         r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
         if r.status_code != 200:
             log("YT RSS HTTP", r.status_code); return []
-        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)[: C.YT_TOP_ENTRIES]
-        for ent in entries:
+        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
+        window = entries[: C.YT_TOP_ENTRIES]
+        log(f"YT scan {len(window)}/{len(entries)} video mới nhất")
+        kw_hits = 0
+        for ent in window:
             tm = re.search(r"<title>(.*?)</title>", ent, re.DOTALL)
             if not tm: continue
             title = html.unescape(tm.group(1)).strip()
-            if not C.YT_KEYWORD_RE.search(title): continue
+            if not C.YT_KEYWORD_RE.search(title):
+                continue                      # video không có CODE CHUNG -> im lặng bỏ
+            kw_hits += 1
             found = code_sau_keyword_yt(title)
             if found:
-                log(f'YT hit: "{title[:90]}" -> {found}')
+                log(f'YT hit: "{title[:80]}" -> {found}')
                 codes.extend(found)
             else:
-                log(f'YT: có "CODE CHUNG" nhưng không trích được code: "{title[:90]}"')
+                log(f'YT: có "CODE CHUNG" nhưng không trích được mã (token sau không '
+                    f'mở đầu prefix {C.CODE_PREFIXES}?): "{title[:80]}"')
+        if kw_hits == 0:
+            log("YT: không video nào trong cửa sổ có 'CODE CHUNG'")
     except Exception as e:
         log("YT watcher lỗi:", e)
     seen, out = set(), []
