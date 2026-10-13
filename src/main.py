@@ -72,22 +72,24 @@ def main():
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
 
                 cands = get_yt_candidates()
+                queue_changed = False
                 for c in cands:
                     if c in state:
                         log(f"YT code {c} đã xong (nằm trong code_da_nhap.txt) -> bỏ qua")
                         continue
                     if c in queue:
-                        continue                       # đang chờ cooldown / đang probe
+                        continue                        # đang chờ cooldown / đang probe
                     if YQ.add_if_new(queue, c, now):
+                        queue_changed = True            # <-- FIX: đánh dấu để push NGAY
                         log(f"YT ALERT: queue+ {c} (chờ {YT_COOLDOWN}s sync)")
                         send(msg_yt_alert(c, YT_COOLDOWN))
 
                 touched = False
                 for c in list(queue.keys()):
                     if c in state:
-                        queue.pop(c, None); continue
+                        queue.pop(c, None); queue_changed = True; continue
                     if not YQ.eligible(queue, c, now, YT_COOLDOWN):
-                        continue                       # chưa đủ cooldown
+                        continue
                     rem, ne = process_code(session, c, users, state, mem, errs)
                     touched = True
                     if c in state or (rem == 0 and ne == 0):
@@ -102,10 +104,13 @@ def main():
                                         f"YT code không sync sau {YT_MAX_PROBE} lần thử (bỏ qua)"))
                                     errs.add(f"{c}|{uid}")
                             state.add(c); queue.pop(c, None)
-                if touched:
+                if touched or queue_changed:
+                    # FIX: push queue NGAY khi vừa thêm code -> first_seen sống sót qua run,
+                    # cooldown đếm đúng 60s -> hết cảnh reset mỗi vòng + spam alert.
                     write_state(state); write_errors(errs); YQ.save_queue(queue)
                     commit_paths(STATE_FILES,
-                                 f"chore(state): {len(state)} done / {len(errs)} loi")
+                                 f"chore(state): {len(state)} done / {len(errs)} loi / "
+                                 f"{len(queue)} queue")
                 else:
                     log(f"vòng này: {len(cands)} code từ YT, {len(queue)} code đang chờ "
                         f"cooldown/probe -> chưa có gì mới, đợi refresh kỳ sau")
