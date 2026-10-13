@@ -14,17 +14,14 @@ def save_queue(q):
     json.dump(q, open(QFILE(), "w", encoding="utf-8"), indent=0, ensure_ascii=False)
 
 def commit_queue(q):
-    save_queue(q)
-    commit_paths(["yt_queue.json"], f"chore(yt-queue): {len(q)} pending")
+    save_queue(q); commit_paths(["yt_queue.json"], f"chore(yt-queue): {len(q)} pending")
 
 def add_if_new(q, code, now):
     if code in q: return False
-    q[code] = {"first_seen": now, "probes": 0}
-    return True
+    q[code] = {"first_seen": now, "probes": 0}; return True
 
 def eligible(q, code, now, cooldown):
-    m = q.get(code)
-    return bool(m) and (now - m["first_seen"] >= cooldown)
+    m = q.get(code); return bool(m) and (now - m["first_seen"] >= cooldown)
 
 def bump_probe(q, code):
     m = q.get(code)
