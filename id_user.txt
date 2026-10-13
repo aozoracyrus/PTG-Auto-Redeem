@@ -1,6 +1,3 @@
-# region - ID (12 ký tự dạng XXXX-XXXX-XXXX). Dòng # là comment.
 # Thêm dàn ID: mỗi ID một dòng, bao nhiêu cũng được.
-# Block VN trước / TH sau nếu muốn ID VN được nhập trước khi code chạm usage-limit.
 # Nếu bạn thích nó, bạn có thể donate cho tôi gói sản phẩm qua id ở dưới :)) (just kidding)
-VN - 4MFY-FMHL-LMGY
-TH - 5MBY-FMHL-LMGG
+4MFY-FMHL-LMGY
