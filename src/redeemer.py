@@ -13,8 +13,6 @@ def _fill_by_ph(page, placeholders, value):
     return None
 
 def _blur(page, loc=None):
-    """Ô code dạng CHIP: blur mới đóng gói chữ thành chip = commit state
-       (giống 'tap ra khoảng không' trên điện thoại)."""
     try:
         if loc is not None: loc.blur()
     except Exception: pass
@@ -28,6 +26,38 @@ def _low(page):
 
 def _any(b, needles):
     return any(str(n).lower() in b for n in needles)
+
+# ===== ĐỌC MODAL (portal/dialog/alertdialog) TÁCH RIÊNG KHỎI BODY =====
+_DIALOG_SEL = (
+    "[role='dialog'], [role='alertdialog'], [role='alert'], "
+    "[aria-modal='true'], "
+    "dialog, [class*='modal' i], [class*='dialog' i], "
+    "[class*='popup' i], [class*='confirm' i], [class*='toast' i]"
+)
+_DIALOG_TEXT_NEEDLES = [
+    "hoàn tất nhập mã", "đã hoàn tất", "thành công nhập", "nhập thành công",
+    "thất bại", "failed", "failure",
+]
+
+def _read_dialog(page):
+    """Trả về inner_text của dialog đầu tiên (lowercase) + số dialog tìm thấy.
+       Nếu không có dialog nào render -> ('', 0)."""
+    try:
+        locs = page.locator(_DIALOG_SEL)
+        n = locs.count()
+        if n == 0:
+            return "", 0
+        # lấy text của dialog đầu tiên (thường là cái hiện hành)
+        for i in range(min(n, 3)):
+            try:
+                txt = locs.nth(i).inner_text()
+                if txt.strip():
+                    return txt.lower(), n
+            except Exception:
+                continue
+        return "", n
+    except Exception as e:
+        return f"err:{e}", -1
 
 def _find_server_opener(page):
     factories = []
@@ -82,7 +112,6 @@ def _wait_enabled(loc, secs=6):
     return False
 
 def _classify(body_low):
-    """Gọi KHI ĐÃ BIẾT 0/1. Trả (kind, reason)."""
     if _any(body_low, C.NEED_LOGIN):     return "need_login",  "chưa liên kết tài khoản (cần login/storage_state)"
     if _any(body_low, C.TRANSIENT):      return "transient",   "lỗi hệ thống tạm thời"
     if _any(body_low, C.FAIL_USAGE):     return "usage_limit", "hết lượt nhập / usage limit"
@@ -92,8 +121,52 @@ def _classify(body_low):
     if _any(body_low, C.FAIL_SECTION):   return "other",       "thất bại"
     return "other", "thất bại"
 
+def _poll_modal(page, timeout):
+    """Poll 4 kênh SONG SONG: body '1/1'/'0/1', dialog '1/1'/'0/1', heading
+       'Hoàn tất/Thất bại/Thành công', text đỏ. Trả về (status, kind, reason) hoặc None.
+       Khi dialog render nhưng text không khớp hẳn -> log để hiệu chỉnh."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        sleep(C.REDEEM_POLL_STEP)
+        body_low = _low(page)
+        d_text, d_count = _read_dialog(page)
+        combined = body_low + " " + d_text
+
+        if _any(combined, C.CAPTCHA_HINTS):
+            shot(page, "captcha-post"); return ("captcha", None, None)
+
+        # 1) TỈ SỐ ở body HOẶC dialog -> phán quyền nhanh
+        if C.RATIO_OK in combined:
+            return ("success", None, None)
+        if C.RATIO_FAIL in combined:
+            kind, reason = _classify(d_text or body_low)
+            if kind in ("need_login", "transient"):
+                log(f"RETRY {kind}: {reason}")
+                return ("retry", kind, reason)
+            return ("failure", kind, reason)
+
+        # 2) Heading dialog -> fallback khi không có tỉ số (format số khác, hoặc SPA render trễ)
+        if _any(d_text, _DIALOG_TEXT_NEEDLES):
+            kind, reason = _classify(d_text)
+            if kind in ("need_login", "transient"):
+                log(f"RETRY(dialog) {kind}: {reason}")
+                return ("retry", kind, reason)
+            if kind == "other" and _any(d_text, ["thành công", "hoàn tất"]):
+                # heading "thành công" -> success dù không có 1/1
+                return ("success", None, None)
+            return ("failure", kind, reason)
+
+    # Het thoi gian: dump day du de debug lan sau
+    d_text, d_count = _read_dialog(page)
+    body_full = ""
+    try: body_full = page.locator("body").inner_text()
+    except Exception: pass
+    url = page.url
+    log(f"POLL_TIMEOUT: url={url} | dialog_count={d_count} | "
+        f"dialog_text[:400]={d_text[:400]!r} | body[:2000]={body_full[:2000]!r}")
+    return None
+
 def _attempt(page, code, uid):
-    """status ∈ success|failure|retry|captcha|unknown. Phán quyền = 1/1 vs 0/1."""
     try:
         page.goto(C.URL_VN, wait_until="domcontentloaded", timeout=45000)
         try: page.wait_for_load_state("networkidle", timeout=8000)
@@ -137,27 +210,19 @@ def _attempt(page, code, uid):
             except Exception:
                 shot(page, "clickfail"); return {"status": "retry", "kind": "dom", "reason": "click nút Nhập code thất bại"}
 
-        deadline = time.time() + C.REDEEM_POLL_TIMEOUT
-        body = ""
-        while time.time() < deadline:
-            sleep(C.REDEEM_POLL_STEP); body = _low(page)
-            if _any(body, C.CAPTCHA_HINTS):
-                shot(page, "captcha-post"); return {"status": "captcha"}
-            if C.RATIO_OK in body:
-                return {"status": "success"}
-            if C.RATIO_FAIL in body:
-                kind, reason = _classify(body)
-                if kind in ("need_login", "transient"):
-                    log(f"RETRY {kind}: {reason}")
-                    return {"status": "retry", "kind": kind, "reason": reason}
-                return {"status": "failure", "kind": kind, "reason": reason}
-        if _any(body, C.NEED_LOGIN):
-            return {"status": "retry", "kind": "need_login", "reason": "chưa liên kết tài khoản"}
-        if _any(body, C.TRANSIENT):
-            return {"status": "retry", "kind": "transient", "reason": "lỗi hệ thống tạm"}
-        shot(page, "unknown")
-        log(f"UNKNOWN body[:500]={body[:500]!r}")
-        return {"status": "unknown", "reason": "khong nhan dien duoc phan hoi"}
+        # ----- POLL 4 KÊNH, timeout 30s -----
+        result = _poll_modal(page, 30)
+        if result is None:
+            shot(page, "unknown")
+            return {"status": "unknown", "reason": "không nhận diện được phản hồi"}
+        status, kind, reason = result
+        if status == "captcha":
+            shot(page, "captcha-post"); return {"status": "captcha"}
+        if status == "success":
+            return {"status": "success"}
+        if status == "retry":
+            return {"status": "retry", "kind": kind, "reason": reason}
+        return {"status": "failure", "kind": kind, "reason": reason}
     except Exception as e:
         shot(page, "err")
         log(f"RETRY exception: {e.__class__.__name__}")
