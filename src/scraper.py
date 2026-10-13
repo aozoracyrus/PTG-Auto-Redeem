@@ -1,12 +1,11 @@
 import re
 from . import config as C
-from .parsers import code_gan_ngay_web          # <-- đổi từ code_truoc_valid_until_web
+from .parsers import code_gan_ngay_web
 from .utils import log, sleep, rand_ms, shot
 
-_ACCEPT_RE = re.compile(r"^(Accept|Agree|I agree|ตกลง|ยอมรับ|ยินยอม|Chấp nhận|同意)$", re.I)
+_ACCEPT_RE = re.compile(r"^(Accept|Agree|I agree|ตกลง|ยอมรับ|ยินยอม|Chấp nhận|Đồng ý)$", re.I)
 
 def _dismiss_banner(page):
-    """B3: nếu có cookie/consent banner che, bấm bỏ nó TRƯỚC khi chờ nút cam."""
     for _ in range(2):
         hit = False
         try:
@@ -37,18 +36,15 @@ def _counts(page):
     return " | ".join(parts)
 
 def _open_modal(page):
-    """Chờ nút cam HIỆN (B1 timing, timeout 20s), rồi bấm bằng nhiều chiến lược (B3)."""
     target = page.get_by_text(C.BTN_VIEW_CODES).or_(page.get_by_role("button", name=C.BTN_VIEW_CODES))
     try:
         target.first.wait_for(state="visible", timeout=20000)
     except Exception:
         log("diag counts (sau 20s chờ):", _counts(page))
-        log("❌ nút cam KHÔNG hiện sau 20s -> hoặc selector vẫn sai, hoặc trang chưa render "
-            "(tăng timeout / kiểm tra route có đúng /th/ hay /vn/).")
         shot(page, "no-button")
         return False
     sleep(rand_ms(600, 1200))
-    for attempt in (False, True):               # lần 1 click thường, lần 2 force+dispatch
+    for attempt in (False, True):
         try:
             el = target.first
             try: el.scroll_into_view_if_needed(timeout=3000)
@@ -73,7 +69,6 @@ def _close_modal(page):
     except Exception: pass
 
 def fetch_available_codes(session):
-    """REFRESH TRÌNH DUYỆT: reload scan-page (/th), chờ+nút cam, parse neo NGÀY, đóng modal."""
     codes = set()
     page = None
     try:
