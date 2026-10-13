@@ -4,10 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import config as C
 from src.utils import log, sleep, rand_ms
 from src.browser_session import BrowserSession
-from src.scraper import fetch_available_codes
 from src.redeemer import redeem_for_user
 from src.users import load_users
-from src.state import load_state, commit_and_push_state
+from src.state import load_state, write_state, load_errors, write_errors, commit_paths
 from src.webhook import send, msg_success, msg_failure, msg_yt_alert
 from src.trigger import trigger_next_run
 from src.youtube_watcher import get_yt_candidates
@@ -20,86 +19,95 @@ DMIN, DMAX  = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", "
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE= int(os.getenv("YT_MAX_PROBE", "5"))
 
-# kind thất bại VĨNH VIỄN (chốt cả khi nguồn=yt). dom/exception/form_invalid KHÔNG ở đây
-# -> chúng là retry, để selector hỏng không đốt code vào state.
-PERMANENT_ALWAYS = {"usage_limit", "id_error", "validation"}
+STATE_FILES = ["code_da_nhap.txt", "yt_queue.json", "id_code_loi.txt"]
 
-def is_code_fully_done(code, users, state):
-    if not users: return False
-    return all(f"{code}|{u['id']}" in state for u in users)
-
-def process_code(session, code, users, state, source):
-    pending = [u for u in users if f"{code}|{u['id']}" not in state]
-    if not pending: return (0, 0)
-    log(f">> code {code} [src={source}]: {len(pending)} user pending")
+def process_code(session, code, users, state, mem, errs):
+    """Nhập code cho mọi ID chưa terminal.
+       - success        -> webhook success; nếu cặp từng nằm trong sổ lỗi thì XOÁ dòng đó.
+       - failure terminal -> webhook failure + GHI 'CODE|ID' vào id_code_loi.txt.
+       - not_exist      -> retry (chưa sync), KHÔNG ghi sổ lỗi.
+       - captcha/retry/unknown -> skip, không ghi gì.
+       Khi TẤT CẢ ID terminal -> state.add(code) = 1 dòng trong code_da_nhap.txt."""
+    term = mem.setdefault(code, set())
+    pending = [uid for uid in users if uid not in term]
+    if not pending: return 0, 0
+    log(f">> code {code}: {len(pending)} ID pending")
     ne_hits = 0
-    for u in pending:
-        r = redeem_for_user(session, u["region"], code, u["id"])
+    for uid in pending:
+        r = redeem_for_user(session, code, uid)
         st = r["status"]
         if st in ("captcha", "retry", "unknown"):
-            log(f"   {st} {u['region']}/{u['id']} -> skip (retry; khong chot, khong webhook)")
+            log(f"   {st} {uid} -> skip (retry; khong chot, khong webhook, khong so loi)")
             sleep(rand_ms(DMIN, DMAX)); continue
+        pair = f"{code}|{uid}"
         if st == "success":
-            send(msg_success(u["region"], code, u["id"])); state.add(f"{code}|{u['id']}")
+            send(msg_success(code, uid))
+            term.add(uid)
+            if pair in errs:
+                errs.discard(pair)
+                log(f"   {pair}: thanh cong -> xoa khoi so loi")
         else:
             kind = r.get("kind", "other")
-            if kind in PERMANENT_ALWAYS or source == "web":
-                send(msg_failure(u["region"], code, u["id"], r.get("reason", "unknown")))
-                state.add(f"{code}|{u['id']}")
+            if kind == "not_exist":
+                ne_hits += 1
+                log(f"   yt-probe {uid} -> not_exist (chua sync, giu retry)")
             else:
-                if kind == "not_exist": ne_hits += 1
-                log(f"   yt-probe {u['region']}/{u['id']} -> '{kind}' (chua sync, giu retry)")
+                send(msg_failure(code, uid, r.get("reason", "unknown")))
+                term.add(uid)
+                errs.add(pair)                      # <-- GHI SỔ LỖI
+                log(f"   {pair}: that bai -> ghi vao id_code_loi.txt")
         sleep(rand_ms(DMIN, DMAX))
-    remaining = sum(1 for u in users if f"{code}|{u['id']}" not in state)
-    return (remaining, ne_hits)
-
-def force_commit_yt_timeout(code, users, state):
-    for u in users:
-        key = f"{code}|{u['id']}"
-        if key not in state:
-            send(msg_failure(u["region"], code, u["id"],
-                             f"YT code không sync sau {YT_MAX_PROBE} lần thử (bỏ qua)"))
-            state.add(key)
+    if users and all(uid in term for uid in users):
+        state.add(code)
+        log(f"   code {code}: TAT CA ID da terminal -> ghi state 1 dong")
+    remaining = sum(1 for uid in users if uid not in term)
+    return remaining, ne_hits
 
 def main():
     start = time.time()
-    log(f"start | REFRESH={REFRESH}s MAXRUN={MAXRUN}s delay={DMIN}-{DMAX}ms "
-        f"YT_COOLDOWN={YT_COOLDOWN}s prefixes={C.CODE_PREFIXES} lang=EN|TH|VN ratio=0/1|1/1")
+    log(f"start | MODE=YouTube->VN | REFRESH={REFRESH}s MAXRUN={MAXRUN}s "
+        f"delay={DMIN}-{DMAX}ms YT_COOLDOWN={YT_COOLDOWN}s prefixes={C.CODE_PREFIXES}")
     session = BrowserSession()
+    mem  = {}                    # code -> set(ID terminal) trong run
+    errs = load_errors()         # sổ lỗi CODE|ID (giữ suốt run, push khi đổi)
     try:
         session.open()
         while time.time() - start < MAXRUN:
             try:
                 now = time.time()
-                codes_web = fetch_available_codes(session)
-                web_set = set(codes_web)
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
+
                 for c in get_yt_candidates():
-                    if c in queue: continue
-                    if is_code_fully_done(c, users, state): continue
+                    if c in state or c in queue: continue
                     if YQ.add_if_new(queue, c, now):
                         log(f"YT ALERT: queue+ {c} (cho {YT_COOLDOWN}s sync)")
                         send(msg_yt_alert(c, YT_COOLDOWN))
+
                 touched = False
-                for c in codes_web:
-                    rem, _ = process_code(session, c, users, state, source="web")
-                    if c in queue: queue.pop(c, None)
-                    touched = True
                 for c in list(queue.keys()):
-                    if c in web_set: continue
+                    if c in state:
+                        queue.pop(c, None); continue
                     if not YQ.eligible(queue, c, now, YT_COOLDOWN): continue
-                    rem, ne = process_code(session, c, users, state, source="yt")
+                    rem, ne = process_code(session, c, users, state, mem, errs)
                     touched = True
-                    if rem == 0: queue.pop(c, None)
+                    if c in state or (rem == 0 and ne == 0):
+                        queue.pop(c, None)
                     elif ne > 0:
                         p = YQ.bump_probe(queue, c)
                         if p >= YT_MAX_PROBE:
                             log(f"YT timeout: {c} sau {p} probes -> bo cuoc")
-                            force_commit_yt_timeout(c, users, state); queue.pop(c, None)
+                            for uid in users:
+                                if uid not in mem.get(c, set()):
+                                    send(msg_failure(c, uid,
+                                        f"YT code không sync sau {YT_MAX_PROBE} lần thử (bỏ qua)"))
+                                    errs.add(f"{c}|{uid}")          # <-- ghi sổ lỗi khi bỏ cuộc
+                            state.add(c); queue.pop(c, None)
                 if touched:
-                    commit_and_push_state(state); YQ.commit_queue(queue)
+                    write_state(state); write_errors(errs); YQ.save_queue(queue)
+                    commit_paths(STATE_FILES,
+                                 f"chore(state): {len(state)} done / {len(errs)} loi")
                 else:
-                    log("khong co code moi (web/YT deu cu hoac da nhap het) -> doi refresh ky sau")
+                    log("chua co code moi tu YouTube (hoac da xong het) -> doi refresh ky sau")
             except Exception as e:
                 log("loop error:", e)
             sleep(REFRESH)
