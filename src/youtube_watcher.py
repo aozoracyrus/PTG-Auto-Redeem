@@ -20,34 +20,27 @@ def _write_cached_cid(cid):
     except Exception: pass
 
 def resolve_channel_id():
-    """Lấy UC... từ trang /@handle (desktop). Cache vào yt_channel_id.txt khỏi fetch lại."""
     cid = _read_cached_cid()
     if cid: return cid
     try:
-        r = requests.get(f"https://www.youtube.com/{C.YT_HANDLE}", headers={"User-Agent": UA}, timeout=15)
+        # /videos = đúng tab Videos (không phải giới thiệu/trang chủ kênh)
+        r = requests.get(f"https://www.youtube.com/{C.YT_HANDLE}/videos",
+                         headers={"User-Agent": UA}, timeout=15)
         m = re.search(r'"channelId":"(UC[\w-]{20,})"', r.text) or \
             re.search(r'"externalId":"(UC[\w-]{20,})"', r.text)
         if m:
             _write_cached_cid(m.group(1)); log("resolved channel id:", m.group(1)); return m.group(1)
-        log("YT: không resolve được channel id từ HTML (trang đổi cấu trúc?)")
+        log("YT: không resolve được channel id từ HTML")
     except Exception as e:
         log("YT resolve lỗi:", e)
     return None
 
 def get_yt_candidates():
-    """
-    Trả về list giftcode từ title của N video MỚI NHẤT. Chiến lược positional:
-      1) title phải chứa 'CODE CHUNG' (YT_KEYWORD_RE, re.I) -> lọc video không-code.
-      2) lấy token in-hoa mở đầu PREFIX đứng ngay sau keyword (code_sau_keyword_yt).
-    Vì NPH luôn đặt code NGAY SAU 'CODE CHUNG', bước 2 cho ra đúng 1 mã, bất kể
-    code có số (PT26BATPET) hay không số (PTGIANTVEGGIE), bất kể độ dài.
-    """
     cid = resolve_channel_id()
     if not cid:
-        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này (bot vẫn chạy web-only). "
-            "Xem README mục 'Lấy Channel ID'.")
+        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này (bot vẫn chạy web-only).")
         return []
-    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"   # RSS = chỉ tab Videos
     codes = []
     try:
         r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
@@ -59,14 +52,13 @@ def get_yt_candidates():
             if not tm: continue
             title = html.unescape(tm.group(1)).strip()
             if not C.YT_KEYWORD_RE.search(title):
-                continue                                  # không có 'CODE CHUNG' -> bỏ (lọc nhiễu)
-            found = code_sau_keyword_yt(title)            # positional + prefix
+                continue
+            found = code_sau_keyword_yt(title)
             if found:
                 log(f'YT hit: "{title[:90]}" -> {found}')
                 codes.extend(found)
             else:
-                log(f'YT: có "CODE CHUNG" nhưng không trích được code (token sau không mở đầu '
-                    f'prefix {C.CODE_PREFIXES}?): "{title[:90]}"')
+                log(f'YT: có "CODE CHUNG" nhưng không trích được code: "{title[:90]}"')
     except Exception as e:
         log("YT watcher lỗi:", e)
     seen, out = set(), []
