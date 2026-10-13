@@ -4,9 +4,9 @@ from . import config as C
 from .utils import log
 
 class BrowserSession:
-    """Giữ 1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT loop.
-       reload()=F5; restart()=mở browser fingerprint MỚI (khi captcha).
-       Context dùng VIEWPORT MOBILE để khớp layout bottom-sheet modal (đã kiểm chứng tay)."""
+    """1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT loop.
+       reload()=F5; restart()=fingerprint MỚI khi captcha.
+       Viewport MOBILE để khớp layout bottom-sheet đã kiểm chứng bằng tay."""
     def __init__(self):
         self._cm = None; self.browser = None; self.context = None; self.scan_page = None
 
@@ -20,7 +20,7 @@ class BrowserSession:
         loc, tz = self._locale_tz(region)
         kw = dict(locale=loc, timezone_id=tz,
                   viewport=dict(C.MOBILE_VIEWPORT), device_scale_factor=3,
-                  user_agent=C.MOBILE_UA)            # is_mobile/has_touch: Firefox ignore, bỏ qua
+                  user_agent=C.MOBILE_UA)
         if C.STORAGE_STATE and os.path.exists(C.STORAGE_STATE):
             kw["storage_state"] = C.STORAGE_STATE
         self.context = self.browser.new_context(**kw)
