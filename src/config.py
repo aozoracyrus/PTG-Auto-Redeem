@@ -45,5 +45,5 @@ MOBILE_VIEWPORT = {"width": 390, "height": 844}
 MOBILE_UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
 YT_HANDLE = "@PlayTogetherVNGofficial"
-YT_TOP_ENTRIES = 3
+YT_TOP_ENTRIES = 15
 YT_CHANNEL_ID_FILE = "yt_channel_id.txt"
