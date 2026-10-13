@@ -23,9 +23,8 @@ def resolve_channel_id():
     cid = _read_cached_cid()
     if cid: return cid
     try:
-        # /videos = đúng tab Videos (không phải giới thiệu/trang chủ kênh)
         r = requests.get(f"https://www.youtube.com/{C.YT_HANDLE}/videos",
-                         headers={"User-Agent": UA}, timeout=15)
+                         headers={"User-Agent": UA}, timeout=15)   # đúng tab Videos
         m = re.search(r'"channelId":"(UC[\w-]{20,})"', r.text) or \
             re.search(r'"externalId":"(UC[\w-]{20,})"', r.text)
         if m:
@@ -36,11 +35,12 @@ def resolve_channel_id():
     return None
 
 def get_yt_candidates():
+    """RSS feed = chỉ video tab Videos. Title chứa 'CODE CHUNG' -> trích mã đứng sau."""
     cid = resolve_channel_id()
     if not cid:
-        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này (bot vẫn chạy web-only).")
+        log("YT watcher: CHƯA có channel id -> bỏ qua vòng này.")
         return []
-    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"   # RSS = chỉ tab Videos
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}"
     codes = []
     try:
         r = requests.get(url, headers={"User-Agent": UA}, timeout=15)
@@ -51,8 +51,7 @@ def get_yt_candidates():
             tm = re.search(r"<title>(.*?)</title>", ent, re.DOTALL)
             if not tm: continue
             title = html.unescape(tm.group(1)).strip()
-            if not C.YT_KEYWORD_RE.search(title):
-                continue
+            if not C.YT_KEYWORD_RE.search(title): continue
             found = code_sau_keyword_yt(title)
             if found:
                 log(f'YT hit: "{title[:90]}" -> {found}')
