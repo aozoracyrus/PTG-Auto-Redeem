@@ -4,5 +4,4 @@ shots/*
 !shots/.gitignore
 .venv/
 auth.json
-# LƯU Ý: KHÔNG ignore code_da_nhap.txt / yt_queue.json / yt_channel_id.txt
-#         -> chúng là state, bot cần commit ngược lên repo.
+# KHÔNG ignore code_da_nhap.txt / yt_queue.json / yt_channel_id.txt (là state, bot push ngược)
