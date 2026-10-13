@@ -4,11 +4,9 @@ from .utils import log
 API = "https://api.github.com"
 
 def _token():
-    # Ưu tiên PAT (tin cậy cho dispatches); fallback GITHUB_TOKEN (bị chặn đệ-quy ở nhiều repo)
     return os.getenv("PAT_TOKEN") or os.getenv("GITHUB_TOKEN")
 
 def trigger_next_run():
-    """Gọi workflow_dispatch API để spawn run kế tiếp -> chuỗi 24/7 không cần cron."""
     repo = os.getenv("GITHUB_REPOSITORY")
     wf   = os.getenv("WORKFLOW_FILE", "redeem.yml")
     ref  = os.getenv("GITHUB_REF_NAME") or "main"
