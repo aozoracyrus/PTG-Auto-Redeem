@@ -2,23 +2,23 @@ import os, re
 from . import config as C
 from .utils import log
 
-# REGION - ID  (dấu ngăn "-" hoặc "–", có/không dấu cách; cho phép comment "#" cuối dòng)
-_LINE = re.compile(r"^([A-Za-z]{2})\s*[-–]\s*(.+?)(?:\s+#.*)?$")
+_LEGACY = re.compile(r"^([A-Za-z]{2})\s*[-–]\s*(.+)$")
 
 def load_users():
-    """Đọc id_user.txt -> list user (số phần tử = số dòng hợp lệ, KHÔNG giới hạn).
-       Mỗi ID một dòng 'REGION - ID'. Docstring/ví dụ CHỈ minh hoạ format, không phải limit."""
+    """id_user.txt: mỗi dòng MỘT ID (4-4-4), KHÔNG cần prefix.
+       Vẫn chấp nhận dòng kiểu cũ 'VN - XXXX-...' (tự cắt prefix) khỏi phải sửa file cũ.
+       Trả về list ID (string), giữ thứ tự dòng = thứ tự nhập."""
     fp = os.path.join(os.getcwd(), "id_user.txt")
     if not os.path.exists(fp): return []
-    out = []
+    ids = []
     for raw in open(fp, encoding="utf-8").read().splitlines():
         s = raw.strip()
-        if not s or s.startswith("#"): continue          # dòng trống / comment -> skip
-        m = _LINE.match(s)
-        if not m:
-            log("Bỏ qua dòng không hợp lệ:", repr(s)); continue
-        region, uid = m.group(1).upper(), m.group(2).strip()
-        if not C.ID_RE.fullmatch(uid):                   # chỉ CẢNH BÁO, không block
-            log(f"Cảnh báo: ID '{uid}' (region {region}) không đúng format 4-4-4 — vẫn thử nhập.")
-        out.append({"region": region, "id": uid})
-    return out
+        if not s or s.startswith("#"): continue
+        s = s.split("#", 1)[0].strip()          # bỏ comment cuối dòng
+        m = _LEGACY.match(s)
+        uid = (m.group(2) if m else s).strip().upper()
+        if not uid: continue
+        if not C.ID_RE.fullmatch(uid):
+            log(f"Cảnh báo: '{uid}' không đúng 4-4-4 — vẫn thử nhập.")
+        if uid not in ids: ids.append(uid)
+    return ids
