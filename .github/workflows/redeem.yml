@@ -1,0 +1,65 @@
+name: PTG Auto Redeem (Camoufox + YouTube watcher)
+
+on:
+  workflow_dispatch: {}          # KHÔNG schedule — bật/tắt bằng token
+
+concurrency:
+  group: ptg-redeem
+  cancel-in-progress: false      # 1 browser duy nhất, không song song -> không spam
+
+permissions:
+  contents: write                # push code_da_nhap.txt + yt_queue.json
+  actions:   write               # self-trigger nối chuỗi
+
+jobs:
+  redeem:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360         # trần cứng; script tự thoát ở 345' để kịp nối tiếp
+    env:
+      REFRESH_INTERVAL: "60"     # giây giữa 2 lần RELOAD trang (30 hoặc 60)
+      MAX_RUNTIME:      "20700"  # 345 phút = 20700s (< 360) -> buffer 15'
+      MIN_UPTIME:       "120"    # guard chống fail-loop
+      DELAY_MIN:        "15000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP (15s)
+      DELAY_MAX:        "30000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP (30s)
+      YT_COOLDOWN:      "60"     # giây chờ server sync trước khi probe code YT
+      YT_MAX_PROBE:     "5"      # số lần probe code-YT-chưa-sync trước khi bỏ cuộc
+      WORKFLOW_FILE:    "redeem.yml"
+      DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
+      GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+      PAT_TOKEN:        ${{ secrets.PAT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: true }
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+
+      - name: Cache camoufox data
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: camoufox-${{ runner.os }}-
+
+      - name: Install python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install playwright firefox deps
+        run: python -m playwright install-deps firefox || true
+
+      - name: Fetch camoufox engine
+        run: python -m camoufox fetch
+
+      - name: Run loop (web + YT cooldown + self-trigger ở finally)
+        run: python src/main.py
+
+      - name: Upload screenshots on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots-${{ github.run_number }}
+          path: shots/
+          if-no-files-found: ignore
+          retention-days: 3
