@@ -1,17 +1,22 @@
 r"""
 NGUON CODE DUY NHAT cho VN = API (BO parse HTML: F12 to mobile shell rong).
 
-2 tang:
-  A. Data API v3 playlistItems(UU..) -> items[].snippet.title. Path CO DINH, Google
-     document, KHONG doan schema, KHONG phu thuoc params/A-B. Can YT_API_KEY (secret).
-     -> DAY LA DUONG BEN NHAT: dung API duoc bao tuong thich, thay vi reverse-engineer.
-  B. InnerTube browse (key PUBLIC, khong can secret) -> parse DE QUY. Nhuung params
-     tab Videos la hang cong dong -> CO RUI RO YouTube doi. Tang nay DANG FAIL o vong
-     nay; khoi bang chan doan duoi de biet fail o dau, va/hoac anh chup F12 'browse'
-     de toi hardcode exact (bien doan thanh evidence).
+BUG 5 LUOT QUA LA CUA TOI, KHONG PHAI YOUTUBE: _walk_titles yeu cau MOT dict co dong
+thoi videoId VA title. O model InnerTube MOI (lockup/contentId), videoId va title nam o
+2 dict KHAC nhau (snippet F12: videoId dau tien thuoc 'PlaylistCommand' = nut them vao
+danh sach phat, khong phai renderer) -> dieu kien cung-dict KHONG BAO GIO dung -> 210
+videoId nhung 0 title.
 
-Chan doan InnerTube in MOI VONG (khong can YT_VERBOSE): http / len / so videoId /
-snippet quanh videoId dau -> phan biet 3 ca fail ma khong doan nua.
+FIX = NGUNG PHU THUOC CAU TRUC: 'CODE CHUNG' do NPH viet tay trong title, text UI/
+comment/aria-label cua YouTube KHONG chua no -> ban than keyword la bo loc nhieu tuyet
+doi, khong can videoId de xac thuc. Walk de quy qua blob, MOI string value khop
+'CODE CHUNG' = title candidate; prefix 'PT' chan nốt nhiễu. Cach nay IMMUNE voi
+videoRenderer vs lockupViewModel vs moi A/B, vi no khong doc cau truc, chi doc noi dung.
+
+2 tang:
+  A. Data API v3 playlistItems(UU..) -> items[].snippet.title. Duoc Google document,
+     bao tuong thich -> DUONG BEN NHAT, khong reverse-engineer. Can YT_API_KEY (secret).
+  B. InnerTube browse (key PUBLIC, khong secret) -> gom string chua keyword (fix tren).
 Keyword 'CODE CHUNG' + prefix 'PT' chay tren title da trich (parsers).
 Docstring RAW STRING de tranh loi unicode-escape luc import.
 """
@@ -26,32 +31,20 @@ _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 
 _dumped_once = False
 
-def _title_from_obj(d):
-    t = d.get("title")
-    if isinstance(t, str):
-        return t.strip()
-    if isinstance(t, dict):
-        runs = t.get("runs")
-        if isinstance(runs, list) and runs and isinstance(runs[0], dict):
-            return str(runs[0].get("text", "")).strip()
-        st = t.get("simpleText")
-        if isinstance(st, str):
-            return st.strip()
-    return ""
-
-def _walk_titles(obj, out, seen, limit):
+def _collect_code_titles(obj, out, seen, limit):
+    """De quy qua JSON, MOI string value chua 'CODE CHUNG' -> title candidate.
+       KHONG can videoId, KHONG can key 'title' -> immune renderer model."""
     if len(out) >= limit:
         return
-    if isinstance(obj, dict):
-        if "videoId" in obj:
-            t = _title_from_obj(obj)
-            if t and t not in seen:
-                seen.add(t); out.append(t)
+    if isinstance(obj, str):
+        if C.YT_KEYWORD_RE.search(obj) and obj not in seen:
+            seen.add(obj); out.append(obj)
+    elif isinstance(obj, dict):
         for v in obj.values():
-            _walk_titles(v, out, seen, limit)
+            _collect_code_titles(v, out, seen, limit)
     elif isinstance(obj, list):
         for v in obj:
-            _walk_titles(v, out, seen, limit)
+            _collect_code_titles(v, out, seen, limit)
 
 def _via_data_api():
     if not C.YT_API_KEY:
@@ -90,9 +83,7 @@ def _via_innertube():
     except Exception as e:
         log("YT InnerTube exc:", e.__class__.__name__, e); return []
     raw = r.text or ""
-    vid_count = raw.count('"videoId"')
-    # --- CHAN DOAN IN MOI VONG (khong can YT_VERBOSE) ---
-    log(f"YT InnerTube DIAG: http={r.status_code} len={len(raw)} videoId={vid_count}")
+    log(f"YT InnerTube DIAG: http={r.status_code} len={len(raw)} videoId={raw.count(chr(34)+'videoId'+chr(34))}")
     if r.status_code != 200:
         log("   body[:200]=", repr(raw[:200])); return []
     try:
@@ -100,24 +91,14 @@ def _via_innertube():
     except Exception:
         log("   khong phai JSON; body[:200]=", repr(raw[:200])); return []
     out, seen = [], set()
-    _walk_titles(j, out, seen, C.YT_VIDEO_SCAN)
-    if vid_count > 0 and not out:
-        # video co nhung title khong nam o 'title' -> in snippet de lock _title_from_obj
-        i = raw.find('"videoId"')
-        log("   co videoId nhung 0 title -> snippet quanh videoId dau (de sua _title_from_obj):")
-        log("   ", repr(raw[max(0, i-40): i+260]))
-    elif vid_count == 0:
-        # 200 nhung khong co video nao -> params tab Videos sai/cu -> in dau blob de nhan dien
-        log("   200 nhung 0 videoId -> PARAMS tab Videos cu/sai. Snippet dau blob:")
-        log("   ", repr(raw[:300]))
+    _collect_code_titles(j, out, seen, 200)            # limit generous; code o video moi nhat = dau blob
+    log(f"   string chua 'CODE CHUNG' = {len(out)}")
     return out
 
 def _codes_from_titles(titles):
     codes = []
     for t in titles:
-        if not C.YT_KEYWORD_RE.search(t):
-            continue
-        found = code_sau_keyword_yt(t)
+        found = code_sau_keyword_yt(t)                 # positional + prefix PT
         if found:
             log(f'YT hit: "{t[:90]}" -> {found}'); codes.extend(found)
         else:
@@ -148,14 +129,12 @@ def get_yt_candidates():
             "; InnerTube da chay (xem DIAG o tren). Duong het doan = tao YT_API_KEY (Data API).")
         return []
 
-    n_kw = sum(1 for t in titles if C.YT_KEYWORD_RE.search(t))
+    n_kw = len(titles)                                 # titles DA duoc loc keyword o _collect
     if verbose or not _dumped_once:
         _dumped_once = True
-        log(f"YT [{via}]: trich {len(titles)} TIEU DE VIDEO (moi nhat):")
-        for i, t in enumerate(titles, 1):
-            flag = "  <== CODE CHUNG" if C.YT_KEYWORD_RE.search(t) else ""
-            log(f"   [{i:2}] {t[:110]}{flag}")
-        log(f"YT [{via}]: so tieu de chua 'CODE CHUNG' = {n_kw}")
+        log(f"YT [{via}]: trich {n_kw} TITLE CHUA 'CODE CHUNG':")
+        for i, t in enumerate(titles[:C.YT_VIDEO_SCAN], 1):
+            log(f"   [{i:2}] {t[:110]}")
     else:
-        log(f"YT [{via}]: OK ({len(titles)} tieu de) - so chua 'CODE CHUNG' = {n_kw}")
+        log(f"YT [{via}]: OK ({n_kw} title 'CODE CHUNG')")
     return _codes_from_titles(titles)
