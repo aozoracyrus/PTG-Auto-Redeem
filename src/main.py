@@ -1,4 +1,4 @@
-import os, sys, time, json
+import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config as C
@@ -6,7 +6,7 @@ from src.utils import log, sleep, rand_ms
 from src.browser_session import BrowserSession
 from src.scraper import fetch_available_codes
 from src.redeemer import redeem_for_user
-from src.api_redeemer import redeem_via_api
+from src.api_redeemer import redeem_via_api, preview_payload
 from src.users import load_users
 from src.state import load_state, commit_and_push_state
 from src.webhook import send, msg_success, msg_failure, msg_yt_alert
@@ -20,20 +20,14 @@ DMIN, DMAX   = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", 
 YT_COOLDOWN  = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE = int(os.getenv("YT_MAX_PROBE", "5"))
 USE_API      = os.getenv("USE_API", "1") == "1"
-DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"     # 1 = khong POST, khong webhook, khong chot; IN payload de doi chieu F12
-TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()  # VD "PTGIANTVEGGIE" = ep redeem NGAY (CHOT THAT!)
+DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"
+TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()
 
 SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other"}
 
 def is_code_fully_done(code, users, state):
     if not users: return False
     return all(f"{code}|{u['id']}" in state for u in users)
-
-def _preview_payload(code, uid):
-    pl = {}
-    for k, v in C.API_PAYLOAD_TEMPLATE.items():
-        pl[k] = v.format(code=code, id=uid, region="vn") if isinstance(v, str) else v
-    return json.dumps(pl, ensure_ascii=False)
 
 def process_code(session, code, users, state, source):
     pending = [u for u in users if f"{code}|{u['id']}" not in state]
@@ -43,12 +37,12 @@ def process_code(session, code, users, state, source):
     for u in pending:
         if DRY_RUN:
             log(f"   DRY-RUN would redeem {code} for {u['id']} (via={'API' if USE_API else 'browser'})")
-            log(f"   DRY-RUN payload -> POST {C.API_URL} : {_preview_payload(code, u['id'])}")
-            sleep(rand_ms(DMIN, DMAX)); continue          # khong chot, khong webhook
+            log(f"   DRY-RUN payload -> POST {C.API_URL} : {preview_payload(code, u['id'])}")
+            sleep(rand_ms(DMIN, DMAX)); continue
         r = redeem_via_api(code, u["id"]) if USE_API else redeem_for_user(session, code, u["id"])
         st = r["status"]
         if st in ("captcha", "retry", "unknown"):
-            log(f"   {st} {u['id']} -> skip (retry; không chốt, không webhook)")
+            log(f"   {st} {u['id']} -> skip (retry; khong chot, khong webhook)")
             sleep(rand_ms(DMIN, DMAX)); continue
         if st == "success":
             send(msg_success(code, u["id"])); state.add(f"{code}|{u['id']}")
@@ -60,9 +54,9 @@ def process_code(session, code, users, state, source):
                 if source == "web":
                     send(msg_failure(code, u["id"], r.get("reason", "unknown"))); state.add(f"{code}|{u['id']}")
                 else:
-                    ne_hits += 1; log(f"   yt-probe {u['id']} -> not_exist (chưa sync, giữ retry)")
+                    ne_hits += 1; log(f"   yt-probe {u['id']} -> not_exist (chua sync, giu retry)")
             else:
-                log(f"   bot-error {kind} {u['id']} -> skip (retry, không chốt)")
+                log(f"   bot-error {kind} {u['id']} -> skip (retry, khong chot)")
         sleep(rand_ms(DMIN, DMAX))
     remaining = sum(1 for u in users if f"{code}|{u['id']}" not in state)
     return (remaining, ne_hits)
@@ -71,7 +65,7 @@ def force_commit_yt_timeout(code, users, state):
     for u in users:
         key = f"{code}|{u['id']}"
         if key not in state:
-            send(msg_failure(code, u["id"], f"YT code không sync sau {YT_MAX_PROBE} lần thử (bỏ qua)"))
+            send(msg_failure(code, u["id"], f"YT code khong sync sau {YT_MAX_PROBE} lan thu (bo qua)"))
             state.add(key)
 
 def main():
@@ -92,20 +86,22 @@ def main():
                 web_set = set(codes_web)
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
 
+                touched = False
+                queue_dirty = False                 # FIX-1: flag rieng cho queue (khong dung chung touched)
+
                 for c in get_yt_candidates():
                     if c in queue: continue
                     if is_code_fully_done(c, users, state): continue
                     if YQ.add_if_new(queue, c, now):
-                        log(f"YT ALERT: queue+ {c} (chờ {YT_COOLDOWN}s sync)")
+                        queue_dirty = True          # FIX-2: add code moi = queue doi -> phai persist
+                        log(f"YT ALERT: queue+ {c} (cho {YT_COOLDOWN}s sync)")
                         send(msg_yt_alert(c, YT_COOLDOWN))
 
-                touched = False
                 for c in codes_web:
                     rem, _ = process_code(session, c, users, state, source="web")
-                    if c in queue: queue.pop(c, None)
+                    if c in queue: queue.pop(c, None); queue_dirty = True
                     touched = True
 
-                # ===== EPE CHECK AUTO REDEEM: TEST_CODE chay thang pipeline, ket qua CHOT NGAY =====
                 if TEST_CODE and not is_code_fully_done(TEST_CODE, users, state):
                     log(f"TEST_CODE: ep redeem {TEST_CODE} (source=web -> khong doi cooldown, chot ket qua ngay)")
                     process_code(session, TEST_CODE, users, state, source="web")
@@ -116,17 +112,26 @@ def main():
                     if not YQ.eligible(queue, c, now, YT_COOLDOWN): continue
                     rem, ne = process_code(session, c, users, state, source="yt")
                     touched = True
-                    if rem == 0: queue.pop(c, None)
+                    if rem == 0:
+                        queue.pop(c, None); queue_dirty = True
                     elif ne > 0:
-                        p = YQ.bump_probe(queue, c)
+                        p = YQ.bump_probe(queue, c); queue_dirty = True
                         if p >= YT_MAX_PROBE:
-                            log(f"YT timeout: {c} sau {p} probes -> bỏ cuộc")
+                            log(f"YT timeout: {c} sau {p} probes -> bo cuoc")
                             force_commit_yt_timeout(c, users, state); queue.pop(c, None)
 
+                # FIX-3: state commit khi co redeem (touched); queue commit khi co doi (dirty HOAC touched).
+                # Truoc day queue chi commit khi touched -> add o vong 1 (touched=False) bi mat -> vong 2
+                # load_queue() = {} -> add lai -> first_seen reset -> vinh vien khong eligible -> khong redeem.
                 if touched:
-                    commit_and_push_state(state); YQ.commit_queue(queue)
-                else:
-                    log("không có code mới (YT cũ/hết, web-list VN vốn rong) -> đợi refresh kỳ sau")
+                    commit_and_push_state(state)
+                if queue_dirty or touched:
+                    YQ.commit_queue(queue)
+
+                if not touched and not queue_dirty:
+                    log("khong co code moi (YT cu/het, web-list VN von rong) -> doi refresh ky sau")
+                elif queue_dirty and not touched:
+                    log(f"da queue {len(queue)} code, cho {YT_COOLDOWN}s sync roi redeem vong sau.")
             except Exception as e:
                 log("loop error:", e)
             sleep(REFRESH)
@@ -138,7 +143,7 @@ def main():
         elapsed = time.time() - start
         log(f"end | runtime {int(elapsed)}s")
         if elapsed < MIN_UPTIME:
-            log(f"chuỗi DỪNG (runtime {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) — fix rồi Run workflow tay.")
+            log(f"chuoi DUNG (runtime {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) - fix roi Run workflow tay.")
             sys.exit(2)
 
 if __name__ == "__main__":
