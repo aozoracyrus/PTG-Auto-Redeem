@@ -1,12 +1,12 @@
-import os, sys, time
+import os, sys, time, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config as C
 from src.utils import log, sleep, rand_ms
 from src.browser_session import BrowserSession
-from src.scraper import fetch_available_codes          # stub -> []
-from src.redeemer import redeem_for_user               # chi dung khi USE_API=0
-from src.api_redeemer import redeem_via_api            # duong chinh
+from src.scraper import fetch_available_codes
+from src.redeemer import redeem_for_user
+from src.api_redeemer import redeem_via_api
 from src.users import load_users
 from src.state import load_state, commit_and_push_state
 from src.webhook import send, msg_success, msg_failure, msg_yt_alert
@@ -20,13 +20,20 @@ DMIN, DMAX   = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", 
 YT_COOLDOWN  = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE = int(os.getenv("YT_MAX_PROBE", "5"))
 USE_API      = os.getenv("USE_API", "1") == "1"
+DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"     # 1 = khong POST, khong webhook, khong chot; IN payload de doi chieu F12
+TEST_CODE    = os.getenv("TEST_CODE", "PT26BATPET").strip().upper()  # VD "PTGIANTVEGGIE" = ep redeem NGAY (CHOT THAT!)
 
 SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other"}
-BOT_ERROR_RETRY    = {"dom", "exception"}
 
 def is_code_fully_done(code, users, state):
     if not users: return False
     return all(f"{code}|{u['id']}" in state for u in users)
+
+def _preview_payload(code, uid):
+    pl = {}
+    for k, v in C.API_PAYLOAD_TEMPLATE.items():
+        pl[k] = v.format(code=code, id=uid, region="vn") if isinstance(v, str) else v
+    return json.dumps(pl, ensure_ascii=False)
 
 def process_code(session, code, users, state, source):
     pending = [u for u in users if f"{code}|{u['id']}" not in state]
@@ -34,7 +41,10 @@ def process_code(session, code, users, state, source):
     log(f">> code {code} [src={source}]: {len(pending)} user pending")
     ne_hits = 0
     for u in pending:
-        # USE_API=1 -> API (khong can session). USE_API=0 -> browser fallback.
+        if DRY_RUN:
+            log(f"   DRY-RUN would redeem {code} for {u['id']} (via={'API' if USE_API else 'browser'})")
+            log(f"   DRY-RUN payload -> POST {C.API_URL} : {_preview_payload(code, u['id'])}")
+            sleep(rand_ms(DMIN, DMAX)); continue          # khong chot, khong webhook
         r = redeem_via_api(code, u["id"]) if USE_API else redeem_for_user(session, code, u["id"])
         st = r["status"]
         if st in ("captcha", "retry", "unknown"):
@@ -67,10 +77,9 @@ def force_commit_yt_timeout(code, users, state):
 def main():
     start = time.time()
     log(f"start | REFRESH={REFRESH}s MAXRUN={MAXRUN}s delay={DMIN}-{DMAX}ms "
-        f"YT_COOLDOWN={YT_COOLDOWN}s USE_API={USE_API} prefixes={C.CODE_PREFIXES}")
+        f"YT_COOLDOWN={YT_COOLDOWN}s USE_API={USE_API} DRY_RUN={DRY_RUN} TEST_CODE={TEST_CODE or '(off)'} "
+        f"prefixes={C.CODE_PREFIXES}")
     session = BrowserSession()
-    # MO BROWSER LAZY: chi khi can fallback (USE_API=0). USE_API=1 -> khong mo
-    # Camoufox -> nhanh hon, khong fingerprint, khong tai binary.
     if not USE_API:
         session.open()
     else:
@@ -79,11 +88,10 @@ def main():
         while time.time() - start < MAXRUN:
             try:
                 now = time.time()
-                codes_web = fetch_available_codes(session)   # stub -> []
-                web_set = set(codes_web)                     # rong
+                codes_web = fetch_available_codes(session)
+                web_set = set(codes_web)
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
 
-                # NGUON CODE DUY NHAT (VN) = YouTube -> queue (cooldown bat dau tinh tu day)
                 for c in get_yt_candidates():
                     if c in queue: continue
                     if is_code_fully_done(c, users, state): continue
@@ -92,12 +100,17 @@ def main():
                         send(msg_yt_alert(c, YT_COOLDOWN))
 
                 touched = False
-                # duong 'web' chay 0 lan (codes_web rong) -> giu de mo rong sau nay
                 for c in codes_web:
                     rem, _ = process_code(session, c, users, state, source="web")
                     if c in queue: queue.pop(c, None)
                     touched = True
-                # probe code YT da qua cooldown (redeeem qua API)
+
+                # ===== EPE CHECK AUTO REDEEM: TEST_CODE chay thang pipeline, ket qua CHOT NGAY =====
+                if TEST_CODE and not is_code_fully_done(TEST_CODE, users, state):
+                    log(f"TEST_CODE: ep redeem {TEST_CODE} (source=web -> khong doi cooldown, chot ket qua ngay)")
+                    process_code(session, TEST_CODE, users, state, source="web")
+                    touched = True
+
                 for c in list(queue.keys()):
                     if c in web_set: continue
                     if not YQ.eligible(queue, c, now, YT_COOLDOWN): continue
@@ -120,14 +133,13 @@ def main():
     except Exception as e:
         log("FATAL:", e)
     finally:
-        try: session.close()          # an toàn du chua open (_cm=None -> skip)
+        try: session.close()
         except Exception: pass
         elapsed = time.time() - start
         log(f"end | runtime {int(elapsed)}s")
         if elapsed < MIN_UPTIME:
             log(f"chuỗi DỪNG (runtime {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) — fix rồi Run workflow tay.")
-            sys.exit(2)               # exit 2 -> step 'Trigger next run' trong yml BO QUA
-        # exit 0 -> step trigger trong redeem.yml self-chain
+            sys.exit(2)
 
 if __name__ == "__main__":
     main()
