@@ -21,7 +21,7 @@ YT_COOLDOWN  = int(os.getenv("YT_COOLDOWN", "60"))
 YT_MAX_PROBE = int(os.getenv("YT_MAX_PROBE", "5"))
 USE_API      = os.getenv("USE_API", "1") == "1"
 DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"     # 1 = khong POST, khong webhook, khong chot; IN payload de doi chieu F12
-TEST_CODE    = os.getenv("TEST_CODE", "PT26BATPET").strip().upper()  # VD "PTGIANTVEGGIE" = ep redeem NGAY (CHOT THAT!)
+TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()  # VD "PTGIANTVEGGIE" = ep redeem NGAY (CHOT THAT!)
 
 SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other"}
 
