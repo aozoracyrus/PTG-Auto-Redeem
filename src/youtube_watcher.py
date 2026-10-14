@@ -1,24 +1,19 @@
 r"""
-NGUON CODE DUY NHAT cho VN = API (BO BO parse HTML /@handle/videos).
+NGUON CODE DUY NHAT cho VN = API (BO parse HTML: F12 to mobile shell rong).
 
-VI SAO BO HTML: F12 Quetta anh paste cho thay trang tra ve la MOBILE SHELL rong
-(<body class="loading"> + spinner + ytm-* + favicon m.youtube.com), KHONG co
-self.__next_f, KHONG co ytInitialData, KHONG co videoRenderer. Danh sach video duoc
-fetch SAU bang XHR (InnerTube browse). -> Moi no luc parse initial HTML (nhay thuong
-hay unescape RSC) VINH VIEN 0 renderer, vi trong HTML do khong co renderer de bat.
-Day khong phai "schema doi" - la ban chat YouTube: data video o API, khong o HTML.
+2 tang:
+  A. Data API v3 playlistItems(UU..) -> items[].snippet.title. Path CO DINH, Google
+     document, KHONG doan schema, KHONG phu thuoc params/A-B. Can YT_API_KEY (secret).
+     -> DAY LA DUONG BEN NHAT: dung API duoc bao tuong thich, thay vi reverse-engineer.
+  B. InnerTube browse (key PUBLIC, khong can secret) -> parse DE QUY. Nhuung params
+     tab Videos la hang cong dong -> CO RUI RO YouTube doi. Tang nay DANG FAIL o vong
+     nay; khoi bang chan doan duoi de biet fail o dau, va/hoac anh chup F12 'browse'
+     de toi hardcode exact (bien doan thanh evidence).
 
-2 TANG API (khong dung HTML):
-  A. Data API v3 playlistItems(UU..) -> items[].snippet.title. Path CO DINH, document,
-     KHONG doan schema. Can YT_API_KEY (secret). Khong co key -> skip tang nay.
-  B. InnerTube browse(browseId=UC.., params=tab Videos, key PUBLIC) -> parse DE QUY tim
-     moi object co videoId+title -> chong vo khi YouTube A/B doi duong dan renderer.
-     KHONG can secret -> chay ngay. params/clientVersion = hang chuan cong dong (neu fail,
-     buoc tiep la anh chup F12 request 'browse' Payload+Response de toi hardcode exact,
-     KHONG doan nua).
-
-Keyword 'CODE CHUNG' + prefix 'PT' chay tren tung title da trich (parsers.code_sau_keyword_yt).
-Docstring nay la RAW STRING de tranh loi unicode-escape luc import.
+Chan doan InnerTube in MOI VONG (khong can YT_VERBOSE): http / len / so videoId /
+snippet quanh videoId dau -> phan biet 3 ca fail ma khong doan nua.
+Keyword 'CODE CHUNG' + prefix 'PT' chay tren title da trich (parsers).
+Docstring RAW STRING de tranh loi unicode-escape luc import.
 """
 import os, re, json, requests
 from . import config as C
@@ -32,7 +27,6 @@ _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _dumped_once = False
 
 def _title_from_obj(d):
-    """Lay text tu {title:{runs:[{text}]}} hoac {title:{simpleText}} hoac {title:'str'}."""
     t = d.get("title")
     if isinstance(t, str):
         return t.strip()
@@ -46,8 +40,6 @@ def _title_from_obj(d):
     return ""
 
 def _walk_titles(obj, out, seen, limit):
-    """De quy qua JSON, moi dict co videoId + title -> lay title. Chong vo schema renderer
-       (khong hardcode duong dan contents.twoColumn...videoRenderer)."""
     if len(out) >= limit:
         return
     if isinstance(obj, dict):
@@ -62,9 +54,8 @@ def _walk_titles(obj, out, seen, limit):
             _walk_titles(v, out, seen, limit)
 
 def _via_data_api():
-    """Tang A: Data API v3 playlistItems theo uploads-playlist = dung tab Videos."""
     if not C.YT_API_KEY:
-        return None                                   # None = khong co key -> bo qua tang nay
+        return None                                   # None = khong key -> bo qua tang A
     try:
         r = requests.get(C.DATA_API_PLAYLIST, params={
             "part": "snippet", "playlistId": C.YT_UPLOADS_ID,
@@ -79,8 +70,7 @@ def _via_data_api():
         log("YT DataAPI khong phai JSON"); return []
     out, seen = [], set()
     for it in (j.get("items") or []):
-        sn = it.get("snippet") or {}
-        t = str(sn.get("title", "")).strip()
+        t = str((it.get("snippet") or {}).get("title", "")).strip()
         if t and t not in seen:
             seen.add(t); out.append(t)
         if len(out) >= C.YT_VIDEO_SCAN:
@@ -88,7 +78,6 @@ def _via_data_api():
     return out
 
 def _via_innertube():
-    """Tang B: InnerTube browse tab Videos, key public, parse de quy."""
     body = {
         "context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
                                 "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
@@ -100,14 +89,27 @@ def _via_innertube():
                           json=body, headers={**_HDR, "Content-Type": "application/json"}, timeout=20)
     except Exception as e:
         log("YT InnerTube exc:", e.__class__.__name__, e); return []
+    raw = r.text or ""
+    vid_count = raw.count('"videoId"')
+    # --- CHAN DOAN IN MOI VONG (khong can YT_VERBOSE) ---
+    log(f"YT InnerTube DIAG: http={r.status_code} len={len(raw)} videoId={vid_count}")
     if r.status_code != 200:
-        log("YT InnerTube http", r.status_code, "->", (r.text or "")[:200]); return []
+        log("   body[:200]=", repr(raw[:200])); return []
     try:
         j = r.json()
     except Exception:
-        log("YT InnerTube khong phai JSON"); return []
+        log("   khong phai JSON; body[:200]=", repr(raw[:200])); return []
     out, seen = [], set()
     _walk_titles(j, out, seen, C.YT_VIDEO_SCAN)
+    if vid_count > 0 and not out:
+        # video co nhung title khong nam o 'title' -> in snippet de lock _title_from_obj
+        i = raw.find('"videoId"')
+        log("   co videoId nhung 0 title -> snippet quanh videoId dau (de sua _title_from_obj):")
+        log("   ", repr(raw[max(0, i-40): i+260]))
+    elif vid_count == 0:
+        # 200 nhung khong co video nao -> params tab Videos sai/cu -> in dau blob de nhan dien
+        log("   200 nhung 0 videoId -> PARAMS tab Videos cu/sai. Snippet dau blob:")
+        log("   ", repr(raw[:300]))
     return out
 
 def _codes_from_titles(titles):
@@ -132,9 +134,9 @@ def get_yt_candidates():
 
     titles, via = None, None
     a = _via_data_api()
-    if a is not None:                                  # co key -> dung tang A (kể cả rỗng cũng tin A)
+    if a is not None:
         titles, via = a, "DATA_API"
-    if not titles:                                     # khong co key HOAC A tra rong -> thu B
+    if not titles:
         b = _via_innertube()
         if b:
             titles, via = b, "INNERTUBE"
@@ -142,9 +144,8 @@ def get_yt_candidates():
             titles, via = [], "NONE"
 
     if not titles:
-        log("YT API: CA 2 tang deu 0 title (DataAPI " +
-            ("co key" if C.YT_API_KEY else "khong key") +
-            " / InnerTube da thu). -> chup F12 request 'browse' (Payload+Response) de hardcode exact, KHONG doan.")
+        log("YT: 0 title. DataAPI=" + ("co key" if C.YT_API_KEY else "khong key") +
+            "; InnerTube da chay (xem DIAG o tren). Duong het doan = tao YT_API_KEY (Data API).")
         return []
 
     n_kw = sum(1 for t in titles if C.YT_KEYWORD_RE.search(t))
@@ -155,9 +156,6 @@ def get_yt_candidates():
             flag = "  <== CODE CHUNG" if C.YT_KEYWORD_RE.search(t) else ""
             log(f"   [{i:2}] {t[:110]}{flag}")
         log(f"YT [{via}]: so tieu de chua 'CODE CHUNG' = {n_kw}")
-        if n_kw == 0:
-            log(f"YT [{via}]: {len(titles)} video moi nhat chua co video code MOI (binh thuong)."
-                + (" Bat YT_VERBOSE=1 de dump moi vong." if not verbose else ""))
     else:
         log(f"YT [{via}]: OK ({len(titles)} tieu de) - so chua 'CODE CHUNG' = {n_kw}")
     return _codes_from_titles(titles)
