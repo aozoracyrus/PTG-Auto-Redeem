@@ -1,4 +1,4 @@
-"""
+r"""
 NGUON CODE DUY NHAT cho VN = parse HTML /channel/<ID>/videos (KHONG con RSS, da 404 tu
 ca IP dan cu lan IP runner -> YouTube khong phuc vu feed cho kenh nay).
 
@@ -7,6 +7,10 @@ SUA SCHEMA: title video nam trong JSON RSC o DANG "title":{"runs":[{"text":...}]
 VINH VIEN khong thay (giai thich "83 run, 0 CODE CHUNG"). Giay bat CA HAI dang.
 Unescape bang json.loads BAT BUOC (RSC escape unicode \u1ea1... -> chay tren tho thi
 '\u' bi upper thanh 'U' va khop nham [A-Z0-9]).
+
+>>> DOCSTRING PHAI LA RAW STRING (chu 'r' truoc ''') vi no chua cac chu '\u' va '\u1ea1'
+>>> de giai thich escape. Neu bo 'r' thi Python coi '\u' la unicode-escape va NO
+>>> SyntaxError luc import (chinh cai loi "truncated \uXXXX escape" anh gap).
 
 DUMP MAU: de ANH THAY bot da vao + doc duoc tieu de that (khong phai tin mu quang).
 Mac dinh dump 1 lan o vong dau; bat YT_VERBOSE=1 de dump MOI VONG.
@@ -20,11 +24,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _ID = C.YT_CHANNEL_ID
- dumped_once = False  # placeholder-fix below
-
 _dumped_once = False
 
-# bat ca "text" (runs) va "simpleText"
+# bat ca "text" (runs) va "simpleText"  -- raw string de regex giu nguyen backslash
 _TEXT_RE = re.compile(r'"(?:text|simpleText)":"((?:[^"\\]|\\.)*)"')
 
 def _unescape_all(html_text):
@@ -42,11 +44,10 @@ def _titles_from_html(html_text):
         if C.YT_KEYWORD_RE.search(t) and t not in seen:
             seen.add(t); kw.append(t)
     kw = kw[: C.YT_TOP_ENTRIES * 4]
-    # mau = cac chuoi DAI NHAT (video title thuong dai nhat trong page) -> chung minh "doc duoc"
     us, uniq = set(), []
     for t in runs:
         if t not in us: us.add(t); uniq.append(t)
-    sample = sorted(uniq, key=len, reverse=True)[:8]
+    sample = sorted(uniq, key=len, reverse=True)[:8]   # chuoi DAI NHAT ~ video title
     return kw, sample, len(runs)
 
 def _codes_from_titles(titles):
@@ -81,7 +82,6 @@ def get_yt_candidates():
             "can soi Elements tab Videos va sua _TEXT_RE.")
         return []
 
-    # --- BANG CHUNG "DA VAO + DOC TIEU DE" ---
     if verbose or not _dumped_once:
         _dumped_once = True
         log(f"YT HTML: VAO DUOC, {total} text-run. MAU {len(sample)} chuoi DAI NHAT (title/video):")
