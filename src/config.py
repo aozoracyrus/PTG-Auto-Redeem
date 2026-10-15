@@ -14,7 +14,6 @@ API_PAYLOAD_TEMPLATE = {
     "roleName": "{id}",
     "code":     "{code}",
 }
-# errorCode: F12 trong tai tuyet doi. F1: success = 1 (KHONG phai 0/200).
 NUM_SUCCESS    = {1}
 NUM_USAGE      = {2117}
 NUM_CODE_BAD   = {2106, 2102}
@@ -22,7 +21,6 @@ NUM_ID_ERROR   = {2105}
 NUM_NEED_LOGIN = {2101}
 NUM_TRANSIENT  = {1000, 1001, 2103}
 NUM_VALIDATION = {1002}
-# F2: success cung la HTTP 200 -> status KHONG con la trong tai; chi dung HTTP nhan KET tam thoi.
 HTTP_STUCK = {403, 404, 408, 425, 429, 500, 501, 502, 503, 504}
 
 # ================= MATCHER UI (VN, CH dung khi USE_API=0 browser fallback) =================
@@ -53,19 +51,27 @@ REDEEM_POLL_STEP    = 1.5
 
 ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 
-# ================= YOUTUBE = API (BO HTML: F12 to mobile shell rong; BO RSS: 404 vinh vien) =================
+# ================= YOUTUBE = API (BO HTML + BO RSS) =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-# ANH yeu cau: chi XEM 3 video moi nhat. LUU Y: cat titles[:3] tho se MAT video vi moi
-# video tao ~2 string variant ("...CODE CHUNG X..." va "...CODE CHUNG X... 56 giay").
-# Nen watcher NHOM theo code roi lay 3 code distinct dau = 3 video moi nhat (xem youtube_watcher).
+# "3" = 3 video MOI NHAT CO CHUA 'CODE CHUNG' (khong phai 3 video dau cua kenh). Loc truoc
+# slice nen video moi KHONG co code bi bo, khong day duoc video code ra khoi cua so.
 YT_VIDEO_SCAN = 3
+# Hang so cho EMBED 'phat hien video moi'.
+YT_CHANNEL_NAME = "Play Together VNG"
+YT_CHANNEL_URL  = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
+# YT_CHANNEL_AVATAR = OVERRIDE TUY CHON, KHONG con la cach duy nhat. De TRONG thi bot TU
+# lay avatar kan tu chinh response InnerTube bang bo loc su-that-URL (CDN googleusercontent
+# + token cat tron =s..-c + hinh vuong, loai banner ngang) -> KHONG hardcode duong dan JSON,
+# cung Triet ly voi thumbnail (chon theo kich thuoc/CDN, khong theo wrapper). Chi ghi vao
+# day (hoac secret cung ten) khi muon mot crop rieng, hoac neu mot ngay YouTube doi ca CDN
+# lan token (rat kho) de override van cứu. Truong hop xau nhat cua heuristic = mat icon tron,
+# KHONG crash, va override van cover -> khong bao gio te hon ban cu.
+YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
+
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()        # Data API v3, key THAT -> chi qua env
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
-# INNERTUBE_KEY = key PUBLIC (nam trong JS bundle YouTube) -> FALLBACK env -> hang public,
-# de quen set secret KHONG lam bot mu (SPOF da gap luoc truoc). Alert scan false-positive
-# co the hien lai -> VO HAI, th hon bot mu. Data API key (that) o tren van qua env.
 INNERTUBE_PUBLIC = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 INNERTUBE_KEY    = (os.getenv("INNERTUBE_KEY", "").strip() or INNERTUBE_PUBLIC)
 INNERTUBE_PARAMS_VIDEOS = "EgZ2aWRlb3PyBgQKAjoA"
