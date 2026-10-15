@@ -1,3 +1,4 @@
+# VN-only (khong region param). msg_status = keu 'bot dang ket' 1 LAN/run, khong spam per-code.
 import os, requests
 from .utils import log
 
@@ -21,3 +22,8 @@ def msg_failure(code, uid, reason):
 def msg_yt_alert(code, cooldown_s):
     return (f'🔔 YouTube phát hiện "CODE CHUNG" -> mã `{code}`. '
             f'Đợi server sync ~{cooldown_s}s trước khi thử nhập (không chốt failure sớm).')
+
+def msg_status(reason, n_pending):
+    return (f'⚠️ Bot ĐANG KẸT: {reason}. '
+            f'({n_pending} code đang chờ trong queue, không chốt failure oan, sẽ tự thử lại '
+            f'khi mở khoá / khi payload được xác nhận.)')
