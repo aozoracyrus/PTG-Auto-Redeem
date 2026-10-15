@@ -56,17 +56,16 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE = API (BO HTML: F12 to mobile shell rong; BO RSS: 404 vinh vien) =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-YT_VIDEO_SCAN = 15
-# YT_API_KEY = Data API v3, key THAT cua project anh -> BAT BUOC qua env/secret, khong hardcode.
-YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
+# ANH yeu cau: chi XEM 3 video moi nhat. LUU Y: cat titles[:3] tho se MAT video vi moi
+# video tao ~2 string variant ("...CODE CHUNG X..." va "...CODE CHUNG X... 56 giay").
+# Nen watcher NHOM theo code roi lay 3 code distinct dau = 3 video moi nhat (xem youtube_watcher).
+YT_VIDEO_SCAN = 3
+YT_API_KEY = os.getenv("YT_API_KEY", "").strip()        # Data API v3, key THAT -> chi qua env
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
-# INNERTUBE_KEY = key PUBLIC cua YouTube (nam trong JS bundle, ai F12 cung thay) -> KHONG phai
-# credential. LUU Y KIEN TRUC: 2 luoc truoc toi bat no qua env de "dap alert scan", nhung alert
-# do la FALSE POSITIVE (anh da dismiss won't-fix) va no tao SPOF: quen set secret = tang B chet
-# = BOT MU. Doi lai = thap hon nhieu. Nay FALLBACK env -> hang public: co secret thi dung (HEAD
-# sach), khong co thi van chay duoc (khong bao gio mu). Alert scan co the hien lai -> VO HAI,
-# mac kem hon la bot mu. Data API key (that) o tren van qua env, khong fallback.
+# INNERTUBE_KEY = key PUBLIC (nam trong JS bundle YouTube) -> FALLBACK env -> hang public,
+# de quen set secret KHONG lam bot mu (SPOF da gap luoc truoc). Alert scan false-positive
+# co the hien lai -> VO HAI, th hon bot mu. Data API key (that) o tren van qua env.
 INNERTUBE_PUBLIC = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 INNERTUBE_KEY    = (os.getenv("INNERTUBE_KEY", "").strip() or INNERTUBE_PUBLIC)
 INNERTUBE_PARAMS_VIDEOS = "EgZ2aWRlb3PyBgQKAjoA"
