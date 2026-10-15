@@ -1,39 +1,32 @@
+# PARSE GIFT CODE tu title YouTube. INVARIENT tu ANH (da lieu nhieu video cu + 3 title F12):
+#   'CODE CHUNG' LUON CO, code = TOKEN VIET LIEN DINH NGAY PHIA SAU no (khong tu dem chen
+#   truoc, khong tach 2 tu). -> Rule khop tam tri anh = LAY TOKEN DAU SAU KEYWORD co do dai
+#   >= CODE_MIN_LEN. Dung o token dau (khong quet het) -> tu tieng Anh dung SAU code
+#   (HALLOWEEN/UPDATE) khong bao gio duoc xet -> khong nhieu. [A-Z0-9]+ tren .upper() tu vo
+#   o ky tu co dau -> vụn tieng Viet chi 1-2 ky, bi min-len bo qua; neu no nam TRUOC code
+#   thi vong lap nhien qua va LOG ra (de anh thay, dung doan mo). SWEETHALLOWEEN (glued
+#   ASCII) -> token dau >=6 -> bat tu dong, KHONG can them vao CODE_PREFIXES.
+# Comment # dau file (khong docstring) -> tranh SyntaxError \u luc import.
 import re
 from . import config as C
+from .utils import log
 
-# ---- NEO 1: YouTube (positional + prefix PT) ----
-_PREFIXES = [p.upper() for p in C.CODE_PREFIXES if p]
-if _PREFIXES:
-    _ALT = "|".join(re.escape(p) for p in _PREFIXES)
-    _YT_AFTER_KW = re.compile(C.KEYWORD_PATTERN + r"([^A-Z0-9]*)((?:" + _ALT + r")[A-Z0-9]*)")
-else:
-    _YT_AFTER_KW = re.compile(C.KEYWORD_PATTERN + r"([^A-Z0-9]*)([A-Z0-9]+)")
+_MIN = int(getattr(C, "CODE_MIN_LEN", 6))
+_KW_RE = re.compile(C.KEYWORD_PATTERN)
+_TOKEN_RE = re.compile(r"[A-Z0-9]+")
 
 def code_sau_keyword_yt(title: str) -> list:
     t = (title or "").upper()
-    m = _YT_AFTER_KW.search(t)
-    return [m.group(2)] if (m and m.group(2)) else []
-
-# ---- NEO 2: Web modal, look-back theo DONG chua NGAY dd/mm/yyyy ----
-# Card: chip / badge / HEADING-CODE(in-hoa) / <label bat ky> dd/mm/yyyy / nut.
-# Heading code luon <=2 dong phia truoc dong ngay; label/badge (co dau/Title-case)
-# khong phai [A-Z0-9] -> khong bi chon nham. => lay duoc code du label tieng Viet la gi.
-def code_gan_ngay_web(text: str) -> list:
-    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
-    seen, out = set(), []
-    for i, ln in enumerate(lines):
-        dm = C.DATE_RE.search(ln)
-        if not dm: continue
-        cand = None
-        pre = C.TOK_RE.findall(ln[:dm.start()])
-        if pre: cand = pre[-1]
-        if not cand:
-            for back in (1, 2):
-                j = i - back
-                if j < 0: break
-                toks = C.TOK_RE.findall(lines[j])
-                if toks: cand = toks[-1]; break
-        if cand:
-            cu = cand.upper()
-            if cu not in seen: seen.add(cu); out.append(cu)
-    return out
+    m = _KW_RE.search(t)
+    if not m:
+        return []
+    tail = t[m.end():]                      # TOAN BO doan sau keyword (invariant anh)
+    tokens = _TOKEN_RE.findall(tail)
+    skipped = []
+    for tk in tokens:                       # quet theo thu tu, DUNG o token dau >= MIN
+        if len(tk) >= _MIN:
+            if skipped:
+                log(f"   YT parse: nhay vụn dau {skipped} -> code = '{tk}'")
+            return [tk]
+        skipped.append(tk)
+    return []
