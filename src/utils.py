@@ -1,3 +1,4 @@
+# log/sleep/rand_ms/shot. Comment # dau file (khong docstring) de tranh SyntaxError \u.
 import os, random, time
 from datetime import datetime, timezone
 
@@ -13,4 +14,4 @@ def shot(page, tag):
         f = os.path.join(d, f"{tag}-{int(time.time())}.png")
         page.screenshot(path=f, full_page=True); log("screenshot:", f)
     except Exception as e:
-        log("screenshot lỗi", e)
+        log("screenshot loi", e)
