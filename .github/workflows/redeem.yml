@@ -1,73 +1,68 @@
-name: PTG Auto Redeem VN (API-first + Camoufox + YouTube watcher)
+name: PTG Auto Redeem VN (API-first + YouTube InnerTube/DataAPI)
 
 on:
-  workflow_dispatch: {}          # KHÔNG schedule — bật/tắt bằng token
+  workflow_dispatch: {}
 
 concurrency:
   group: ptg-redeem-vn
-  cancel-in-progress: false      # run mới chờ run cũ finish -> 1 browser duy nhất
+  cancel-in-progress: false
 
 permissions:
-  contents: write                # push code_da_nhap.txt + yt_queue.json
-  actions:   write               # step 'Trigger next run' self-chain
+  contents: write
+  actions:   write
 
 jobs:
   redeem:
     runs-on: ubuntu-latest
-    timeout-minutes: 360         # trần cứng; script tự thoát ở 345' để kịp nối tiếp
+    timeout-minutes: 360
     env:
-      REFRESH_INTERVAL: "60"     # giây giữa 2 lần RELOAD trang (30 hoặc 60)
-      MAX_RUNTIME:      "20700"  # 345 phút = 20700s (< 360) -> buffer 15'
-      MIN_UPTIME:       "120"    # guard: run phải sống >= cỡ này mới được nối tiếp
-      DELAY_MIN:        "15000"  # ms delay ngẫu nhiên GIỮA MỖI LẦN NHẬP
+      REFRESH_INTERVAL: "60"
+      MAX_RUNTIME:      "20700"
+      MIN_UPTIME:       "120"
+      DELAY_MIN:        "15000"
       DELAY_MAX:        "30000"
-      YT_COOLDOWN:      "60"     # giây chờ server sync trước khi probe code YT
+      YT_COOLDOWN:      "60"
       YT_MAX_PROBE:     "5"
-      USE_API:          "1"      # 1 = gọi thẳng API redeem; 0 = browser fallback
+      USE_API:          "1"
+      YT_VERBOSE:       "0"
+      DRY_RUN:          "0"
+      TEST_CODE:        ""
       WORKFLOW_FILE:    "redeem.yml"
       DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
-      GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}   # state.py push ngược
+      GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+      INNERTUBE_KEY:    ${{ secrets.INNERTUBE_KEY }}
+      YT_API_KEY:       ${{ secrets.YT_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: true }
-
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-
+      - name: Install python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      # Camoufox chi can khi USE_API=0 (browser fallback). De nguyen de fallback chay out-of-box.
       - name: Cache camoufox data
         uses: actions/cache@v4
         with:
           path: ~/.local/share/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: camoufox-${{ runner.os }}-
-
-      - name: Install python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
       - name: Install playwright firefox deps
         run: python -m playwright install-deps firefox || true
-
       - name: Fetch camoufox engine
         run: python -m camoufox fetch
-
-      # main.py exit 0 = êm (nối chuỗi) ; exit 2 = guard MIN_UPTIME / crash (DỪNG chuỗi)
-      - name: Run loop (API redeem + web + YT cooldown)
+      # main.py exit 0 = em (noi chuoi); exit 2 = guard MIN_UPTIME / crash (DUNG chuoi)
+      - name: Run loop (API redeem + YouTube)
         id: run
         run: python src/main.py
-
-      # ===== SELF-TRIGGER GỘP VÀO YML (thay cho src/trigger.py cũ) =====
-      # if: success() -> chỉ chạy khi step 'Run loop' exit 0. Khi main exit 2
-      # (fail sớm/crash) step này BỎ QUA => chuỗi dừng, không spam run đỏ.
       - name: Trigger next run (self-chain 24/7)
         if: success()
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
-          echo ">> đã self-trigger run tiếp theo (ref=${GITHUB_REF_NAME:-main})"
-
+          echo ">> da self-trigger run tiep theo (ref=${GITHUB_REF_NAME:-main})"
       - name: Upload screenshots on failure
         if: always()
         uses: actions/upload-artifact@v4
