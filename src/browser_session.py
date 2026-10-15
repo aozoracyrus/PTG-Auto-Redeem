@@ -1,3 +1,4 @@
+# Camoufox lazy (chi mo khi USE_API=0). 1 context xuyen suot. reload()=F5; restart()=fp moi.
 import os
 from camoufox.sync_api import Camoufox
 from . import config as C
@@ -23,13 +24,13 @@ class BrowserSession:
     def close(self):
         try:
             if self._cm: self._cm.__exit__(None, None, None)
-        except Exception as e: log("close lỗi", e)
+        except Exception as e: log("close loi", e)
         finally: self._cm = self.browser = self.context = self.scan_page = None
 
     def reload(self):
         self.scan_page.reload(wait_until="domcontentloaded", timeout=45000)
 
     def restart(self):
-        log("RESTART browser (xoá trình duyệt vào lại)"); self.close(); self.open()
+        log("RESTART browser (xoa trinh duyet vao lai)"); self.close(); self.open()
 
     def new_temp_page(self): return self.context.new_page()
