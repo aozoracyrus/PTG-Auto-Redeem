@@ -1,7 +1,10 @@
 # NGUON CODE DUY NHAT cho VN = API (BO HTML: F12 to mobile shell rong; BO RSS: 404 vinh vien).
-# 2 tang: A Data API v3 playlistItems(UU..) path co dinh (can YT_API_KEY); B InnerTube browse
-# key PUBLIC, parse DE QUY gom MOI string chua 'CODE CHUNG' (immune renderer model - bug cu
-# la yeu cau videoId+title cung dict, model moi tach ra 2 dict -> 0 title). Comment # dau file.
+# 2 tang: A Data API v3 playlistItems(UU..) path co dinh (can YT_API_KEY THAT, qua env);
+# B InnerTube browse key PUBLIC (fallback trong config, khong bao gio mu vi quen secret),
+# parse DE QUY gom MOI string chua 'CODE CHUNG' (immune renderer model).
+# Quy uoc tra loi de get_yt_candidates phan biet dung, khong in message doi:
+#   None = tang BI BO QUA (khong key)  |  [] = tang CHAY that ma 0 ket qua  |  list = co title.
+# Comment # dau file (khong docstring) -> tranh SyntaxError backslash-u luc import.
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt
@@ -23,6 +26,7 @@ def _collect_code_titles(obj, out, seen, limit):
         for v in obj: _collect_code_titles(v, out, seen, limit)
 
 def _via_data_api():
+    # None = khong key (bo qua); [] = co key nhung 0 title; list = co title.
     if not C.YT_API_KEY: return None
     try:
         r = requests.get(C.DATA_API_PLAYLIST, params={
@@ -42,9 +46,12 @@ def _via_data_api():
     return out
 
 def _via_innertube():
+    # None = bo qua (khong co key nao ca env lan public - chi xay ra neu sua config sai);
+    # [] = CHAY that ma 0 string 'CODE CHUNG'; list = co title. (Key public fallback o config
+    # nen thuong chi None khi anh xoai ca hang public, mac dinh la chay.)
     if not C.INNERTUBE_KEY:
-        log("YT InnerTube: INNERTUBE_KEY trong -> bo qua tang B (dat secret INNERTUBE_KEY hoac YT_API_KEY).")
-        return []
+        log("YT InnerTube: khong co key (env + public deu trong) -> BO QUA tang B.")
+        return None
     body = {"context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
                                     "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
             "browseId": C.YT_CHANNEL_ID, "params": C.INNERTUBE_PARAMS_VIDEOS}
@@ -78,16 +85,18 @@ def _codes_from_titles(titles):
 def get_yt_candidates():
     global _dumped_once
     verbose = os.getenv("YT_VERBOSE", "0") == "1"
-    titles, via = None, None
-    a = _via_data_api()
-    if a is not None: titles, via = a, "DATA_API"
+    a = _via_data_api()      # None | [] | list
+    b = _via_innertube()     # None | [] | list  (goi doc lap, ca 2 re khi skip)
+    titles, via = [], None
+    if a: titles, via = a, "DATA_API"
+    elif b: titles, via = b, "INNERTUBE"
     if not titles:
-        b = _via_innertube()
-        if b: titles, via = b, "INNERTUBE"
-        elif titles is None: titles, via = [], "NONE"
-    if not titles:
-        log("YT: 0 title. DataAPI=" + ("co key" if C.YT_API_KEY else "khong key") +
-            "; InnerTube da chay (xem DIAG). Duong het doan = tao YT_API_KEY (Data API).")
+        # MO TA DUNG trang thai tung tang, KHONG con noi "xem DIAG" khi DIAG khong ton tai.
+        sa = "khong key (BO QUA)" if a is None else "chay -> 0 title"
+        sb = "khong key (BO QUA)" if b is None else "chay -> 0 title"
+        log(f"YT: 0 title. DataAPI: {sa}; InnerTube: {sb}. "
+            f"(InnerTube mac dinh chay bang key public fallback; neu no 'BO QUA' thi kiem tra "
+            f"dong INNERTUBE_KEY trong config.py. Muon HEAD sach alert thi set secret INNERTUBE_KEY.)")
         return []
     n_kw = len(titles)
     if verbose or not _dumped_once:
