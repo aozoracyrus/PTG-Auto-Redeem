@@ -8,7 +8,7 @@ def load_queue():
     fp = QFILE()
     if not os.path.exists(fp): return {}
     try: return json.load(open(fp, encoding="utf-8"))
-    except Exception as e: log("yt_queue đọc lỗi (coi như rỗng):", e); return {}
+    except Exception as e: log("yt_queue doc loi (coi nhu rong):", e); return {}
 
 def save_queue(q):
     json.dump(q, open(QFILE(), "w", encoding="utf-8"), indent=0, ensure_ascii=False)
