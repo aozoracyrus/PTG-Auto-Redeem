@@ -1,15 +1,15 @@
-# DUONG CHINH REDEEM = goi thang API (F12 21:52). Khong Cookie -> login OPTIONAL o tang
-# redeem VNG (box "Dang nhap de rut ngan thoi gian..." chi la gay y; F12 to khong can
-# cookie de redeem). Phan quan thang/thua = MA SO JSON (language-proof); ti so 0/1|1/1
-# chi la backup khi response khong phai JSON. Cung contract voi redeemer._attempt de
-# main.py KHONG can doi: status in success|failure|retry|captcha|unknown (+kind/reason).
-# (Khong dung docstring module co chua backslash-u tran -> tranh SyntaxError luc import.)
+# DUONG CHINH REDEEM = goi thang API (F12). Khong Cookie -> login OPTIONAL. Phan quan =
+# errorCode so (F12 trong tai). Comment # dau file (khong docstring) -> tranh SyntaxError \u.
+# Contract main.py: status in success|failure|retry|stuck|captcha (+kind/reason).
 import uuid, json, requests
 from . import config as C
 from .utils import log
 
+_VAL_LOCK_AFTER = 6
+_val_streak = 0
+_payload_locked = False
+
 def _headers():
-    # Replica Request Headers F12 (bo Baggage/Sentry - server khong bat buoc). KHONG Cookie.
     return {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6",
@@ -41,55 +41,80 @@ def _text_classify(low):
 
 def _num_of(j):
     if not isinstance(j, dict): return None
-    for k in ("code","errorCode","errcode","err_code","resultCode","status"):
+    for k in ("errorCode","code","errcode","err_code","resultCode","status"):
         v = j.get(k)
         if isinstance(v, int): return v
     return None
 
 def preview_payload(code, uid):
-    """In raw payload JSON de doi chieu F12 tab Payload (main.py dung trong DRY_RUN).
-       Day la ham MA main.py import -> thieu no la ImportErrors nhu anh gap."""
     return json.dumps(_payload(code, uid), ensure_ascii=False)
 
 def redeem_via_api(code, uid):
+    global _val_streak, _payload_locked
+    if _payload_locked:
+        return {"status":"stuck","kind":"payload_locked",
+                "reason":"payload chưa xác nhận (1002 lặp) -> ngừng POST, cần F12 tab Payload"}
     try:
         r = requests.post(C.API_URL, json=_payload(code, uid), headers=_headers(), timeout=20)
     except Exception as e:
-        log(f"API network exc: {e.__class__.__name__} -> retry")
-        return {"status": "retry", "kind": "transient", "reason": "network exception"}
+        log(f"API network exc: {e.__class__.__name__} -> stuck")
+        return {"status":"stuck","kind":"network","reason":f"mạng/exception: {e.__class__.__name__}"}
+
     raw = r.text or ""; low = raw.lower()
     try: j = r.json()
     except Exception: j = None
     num = _num_of(j)
-    msg = str((j or {}).get("message") or (j or {}).get("msg") or (j or {}).get("error") or "") if isinstance(j, dict) else ""
+    msg = str((j or {}).get("message") or (j or {}).get("description") or (j or {}).get("msg") or (j or {}).get("error") or "") if isinstance(j, dict) else ""
     mlow = (msg or raw).lower()
     log(f"API http={r.status_code} num={num} msg={msg[:120]!r}")
 
+    # Bat ky response nao KHONG phai 1002 = server hieu request -> payload dang dung -> reset.
+    if num != 1002:
+        _val_streak = 0; _payload_locked = False
+
     if _any(low, C.CAPTCHA_HINTS) or r.status_code == 429:
         return {"status": "captcha"}
-    if num in C.NUM_SUCCESS or (isinstance(j, dict) and j.get("success") is True):
-        k, _ = _text_classify(mlow)                       # paranoia: message mau thuan?
+
+    # ---- errorCode nghiep vu ro (uu tien num F12 truoc text; F2: status khong quyet) ----
+    if num in C.NUM_SUCCESS:
+        k, _ = _text_classify(mlow)
         if k in ("usage_limit","not_exist","id_error"):
             return {"status":"failure","kind":k,"reason":f"num={num} nhưng message báo {k}"}
         return {"status": "success"}
     if num in C.NUM_VALIDATION:
-        log("PAYLOAD SAI? (server tra 1002) -> mo F12 tab Payload, copy raw JSON "
-            "vao API_PAYLOAD_TEMPLATE trong config.py. Bot retry, KHONG chot.")
-        return {"status":"retry","kind":"payload_suspect","reason":"nghi payload sai ten field (1002)"}
-    if num in C.NUM_TRANSIENT:  return {"status":"retry","kind":"transient","reason":f"loi he thong tam (num={num})"}
-    if num in C.NUM_NEED_LOGIN: return {"status":"retry","kind":"need_login","reason":"chua lien ket tai khoan (2101)"}
-    if num in C.NUM_NOT_EXIST:  return {"status":"failure","kind":"not_exist","reason":"khong ton tai / sai ma (2102)"}
-    if num in C.NUM_ID_ERROR:   return {"status":"failure","kind":"id_error","reason":"ID khong tim thay/offline (2105)"}
+        _val_streak += 1
+        pl = preview_payload(code, uid)
+        log(f"   PAYLOAD bot gui ({len(pl)} bytes; doi chieu F12 tab Payload): {pl}")
+        if _val_streak >= _VAL_LOCK_AFTER:
+            _payload_locked = True
+            log(f"   1002 lap {_val_streak} lan -> KHOA payload, ngung POST. "
+                "Mo F12 tab Payload cua request redeem DO, copy raw JSON vao API_PAYLOAD_TEMPLATE, push.")
+            return {"status":"stuck","kind":"payload_locked","reason":"payload 1002 lặp -> khoá"}
+        return {"status":"retry","kind":"payload_suspect","reason":"nghi payload sai (1002) -> can tab Payload"}
+    if num in C.NUM_USAGE:      return {"status":"failure","kind":"usage_limit","reason":"hết lượt nhập / usage limit (2117)"}
+    if num in C.NUM_CODE_BAD:   return {"status":"failure","kind":"not_exist","reason":"không tồn tại / sai mã (2106/2102)"}
+    if num in C.NUM_ID_ERROR:   return {"status":"failure","kind":"id_error","reason":"ID không tìm thấy/offline (2105)"}
+    if num in C.NUM_NEED_LOGIN: return {"status":"retry","kind":"need_login","reason":"chưa liên kết tài khoản (2101)"}
+    if num in C.NUM_TRANSIENT:  return {"status":"stuck","kind":"transient","reason":f"lỗi hệ thống tạm (num={num})"}
+
+    # ---- co num nhung chua map -> text scan quyet ----
     if num is not None:
         k, reason = _text_classify(mlow)
-        if k: return {"status":"failure","kind":k,"reason":reason}
-        return {"status":"failure","kind":"other","reason":f"ma loi chua map num={num}"}
+        if k in ("usage_limit","not_exist","id_error","validation"):
+            return {"status":"failure","kind":k,"reason":reason}
+        if k == "transient":  return {"status":"stuck","kind":"transient","reason":reason}
+        if k == "need_login": return {"status":"retry","kind":"need_login","reason":reason}
+        return {"status":"failure","kind":"other","reason":f"mã lỗi chưa map num={num}"}
+
+    # ---- khong co num: dung HTTP status + text ----
     k, reason = _text_classify(mlow)
-    if k in ("usage_limit","not_exist","id_error","validation"): return {"status":"failure","kind":k,"reason":reason}
-    if k in ("transient","need_login"): return {"status":"retry","kind":k,"reason":reason}
+    if k in ("usage_limit","not_exist","id_error","validation"):
+        return {"status":"failure","kind":k,"reason":reason}
+    if r.status_code in C.HTTP_STUCK:
+        return {"status":"stuck","kind":"http_stuck","reason":f"HTTP {r.status_code} (ket tam thoi / VNG khoa?)"}
     if r.ok:
-        if C.RATIO_FAIL in low: return {"status":"failure","kind":"other","reason":"that bai (0/1)"}
+        if C.RATIO_FAIL in low: return {"status":"failure","kind":"other","reason":"thất bại (0/1)"}
         return {"status":"success"}
-    if C.RATIO_FAIL in low: return {"status":"failure","kind":"other","reason":"that bai (0/1)"}
+    if C.RATIO_FAIL in low: return {"status":"failure","kind":"other","reason":"thất bại (0/1)"}
     log(f"API unknown http={r.status_code} body[:300]={raw[:300]!r}")
-    return {"status":"unknown","reason":"api response chua map"}
+    return {"status":"stuck","kind":"unknown","reason":f"response chưa map (http={r.status_code})"}
