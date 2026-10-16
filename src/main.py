@@ -1,5 +1,8 @@
 # API-first. stuck -> 1 webhook/run (khong spam per-code). Code stuck/retry KHONG pop ->
-# run sau van thay trong queue -> khong ALERT lai (diet spam lop 2). exit 0 noi chain, 2 dung.
+# run sau van thay trong queue -> khong ALERT lai. exit 0 noi chain, 2 dung.
+# DI CHINH so voi ban 'code tu dau': block phat hien doc e['code'] (watcher GIờ tra list[dict],
+# khong con list[str]). main.py CŨ dung 'for c in ...: if c in queue' -> dict in dict ->
+# 'unhashable type: dict' (chinh cai loi log 00:56->01:46). File nay PHAI di CUNG watcher moi.
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -92,13 +95,18 @@ def main():
                 users = load_users(); state = load_state(); queue = YQ.load_queue()
                 touched = False; queue_dirty = False; run_stuck = None
 
-                for c in get_yt_candidates():
-                    if c in queue: continue
-                    if is_code_fully_done(c, users, state): continue
-                    if YQ.add_if_new(queue, c, now):
+                # ===== watcher GIỜ tra list[dict]. Lay e['code'] cho queue/state, truyen
+                # ===== ca e vao msg_yt_alert de webhook dung metadata (title/link/thumb/
+                # ===== avatar) lam embed 'phat hien video moi'. KHONG dung 'c in queue'
+                # ===== voi c la dict -> do chinh la loi unhashable type: dict.
+                for e in get_yt_candidates():
+                    code = e["code"]
+                    if code in queue: continue
+                    if is_code_fully_done(code, users, state): continue
+                    if YQ.add_if_new(queue, code, now):
                         queue_dirty = True
-                        log(f"YT ALERT: queue+ {c} (cho {YT_COOLDOWN}s sync)")
-                        send(msg_yt_alert(c, YT_COOLDOWN))
+                        log(f"YT ALERT: queue+ {code} (cho {YT_COOLDOWN}s sync)")
+                        send(msg_yt_alert(e, YT_COOLDOWN))
 
                 for c in codes_web:
                     rem, _, stk = process_code(session, c, users, state, source="web")
