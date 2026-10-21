@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN (API-first + YouTube InnerTube/DataAPI)
+name: PTG Auto Redeem VN (API-first + YouTube + OCR tự sửa)
 
 on:
   workflow_dispatch: {}
@@ -27,6 +27,15 @@ jobs:
       YT_VERBOSE:       "0"
       DRY_RUN:          "0"
       TEST_CODE:        ""
+      # ----- OCR thumbnail: off | alert | auto -----
+      # alert = chi bao Discord kem anh + text OCR, KHONG tu nhap (MAC DINH).
+      # auto  = VÒNG TỰ SỬA: thu -> sai(2106) thi nho ma sai + doi recipe -> thu ma khac,
+      #         toi da OCR_MAX_TRIES lan (50); 2117 = ma dung het luot -> dung sua.
+      OCR_MODE:         "alert"
+      OCR_MAX_IMAGES:   "3"
+      OCR_MAX_TRIES:    "50"
+      OCR_LOOP_BUDGET:  "180"
+      OCR_ALERT_CAP:    "6"
       WORKFLOW_FILE:    "redeem.yml"
       DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
       GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
@@ -35,13 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: true }
+
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
+
       - name: Install python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      # Camoufox chi can khi USE_API=0 (browser fallback). De nguyen de fallback chay out-of-box.
+
+      # Tesseract = bo may OCR. continue-on-error: OCR la best-effort, thieu no thi tang OCR
+      # tra rong, bot VAN chay binh thuong (khong do ca run).
+      - name: Install tesseract OCR (best-effort)
+        continue-on-error: true
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+
       - name: Cache camoufox data
         uses: actions/cache@v4
         with:
@@ -52,10 +69,11 @@ jobs:
         run: python -m playwright install-deps firefox || true
       - name: Fetch camoufox engine
         run: python -m camoufox fetch
-      # main.py exit 0 = em (noi chuoi); exit 2 = guard MIN_UPTIME / crash (DUNG chuoi)
-      - name: Run loop (API redeem + YouTube)
+
+      - name: Run loop (API redeem + YouTube + OCR)
         id: run
         run: python src/main.py
+
       - name: Trigger next run (self-chain 24/7)
         if: success()
         env:
@@ -63,6 +81,7 @@ jobs:
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
           echo ">> da self-trigger run tiep theo (ref=${GITHUB_REF_NAME:-main})"
+
       - name: Upload screenshots on failure
         if: always()
         uses: actions/upload-artifact@v4
