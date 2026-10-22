@@ -1,25 +1,13 @@
-# NGUON CODE DUY NHAT cho VN = API (BO HTML: F12 to mobile shell rong; BO RSS: 404 vinh vien).
-# 2 tang: A Data API v3 playlistItems (can YT_API_KEY THAT, qua env); B InnerTube browse key
-# PUBLIC (fallback trong config -> khong bao gio mu vi quen secret).
-#
-# TRA VE list[dict] {code,title,video_id,video_url,thumb_url,channel_avatar}. Quy uoc tang:
-#   None = BI BO QUA (khong key) | [] = chay that ma 0 | list = co entry.
-#
-# NGUYEN TAC PHAN BIET ANH (ap DEU ca 2 phuong, khong fallback gop):
-#   thumbnail video = CHU host i.ytimg.com. avatar kan = CHU host googleusercontent + token
-#   cat tron (=sNNN-c / -c-k-no) + hinh vuong, loai banner ngang. KHONG bao gio "lay dai
-#   nhat trong so TAT CA anh" -> do la loi _pick_thumb ban cu (fallback 'or imgs' keo
-#   googleusercontent vao pool thumb = hien avatar/banner thay anh video). Da sua: khong
-#   co ytimg trong card -> thumb = '' (entry 'tran'), webhook tu bo image.
-#
-# _via_innertube LUON duoc goi moi vong (ke ca khi Data API la chinh) de co avatar (DataAPI
-# playlist KHONG chua avatar kan) + redundancy; 1 POST/phut, rat nhe.
-# Comment # dau file (khong docstring) -> tranh SyntaxError backslash-u luc import.
+# NGUON MA CHO VN = API (BO RSS: 404 vinh vien; BO HTML: mobile shell rong). 2 tang:
+# A Data API v3 (can YT_API_KEY, doc duoc MO TA), B InnerTube (key public fallback).
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC, redeem=True);
+# bare = video MOI NHAT KHONG co ma text nhung CO thumbnail (ung vien OCR).
+# PHAN BIET ANH: thumb = CHU i.ytimg.com; avatar = CHU googleusercontent + token cat tron
+# + hinh vuong (loai banner ngang).
 import os, re, json, requests
-from collections import OrderedDict
 from . import config as C
-from .parsers import code_sau_keyword_yt
-from .utils import log
+from .parsers import code_sau_keyword_yt, code_from_ocr_text
+from .utils import log_yt, log_warn
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -27,23 +15,23 @@ _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _dumped_once = False
 _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _IMG_HOSTS = ("ytimg.com", "googleusercontent.com")
-_AV_TOKEN = re.compile(r"=s\d+-c\b")          # token cat tron dac trung avatar (khong banner)
+_AV_TOKEN = re.compile(r"=s\d+-c\b")
+
 
 def _host(u):
-    # khong dung urlparse (bo qua dependency); tach manual 'https://HOST/...'
     try:
         h = u.split("//", 1)[1].split("/", 1)[0]
     except Exception:
         return ""
     return h.lower()
 
+
 def _is_img_host(u):
     h = _host(u)
     return any(h == d or h.endswith("." + d) for d in _IMG_HOSTS)
 
+
 def _iter_images(node):
-    """Yeu (w,h,url) moi dict la ANH (co url http + host thuoc CDN anh), di bo het subtree.
-       Loc theo HOST (su that CDN) chu khong theo ten wrapper -> khong hardcode duong dan."""
     if isinstance(node, dict):
         u = node.get("url")
         if isinstance(u, str) and u.startswith("http") and _is_img_host(u):
@@ -56,37 +44,43 @@ def _iter_images(node):
         for v in node:
             yield from _iter_images(v)
 
+
+def _iter_strings(node):
+    if isinstance(node, dict):
+        for v in node.values():
+            yield from _iter_strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _iter_strings(v)
+    elif isinstance(node, str):
+        yield node
+
+
 def _pick_thumb(node):
-    """Thumb video = lon nhat trong nhom i.ytimg.com cua subtree card.
-       DA SUA (bug ban cu): KHONG con fallback 'or imgs'. Ly do: imgs gom ca googleusercontent
-       (owner avatar/banner trong card), neu fallback thi khi card khong co ytimg se lay
-       googleusercontent lam thumb -> embed hien avatar tron thay anh video. Quy tac moi:
-       chi ytimg; khong co ytimg -> '' (entry 'tran' ve thumb), webhook bo image. Nhat quan
-       voi _pick_avatar (chi googleusercontent): moi thu chi lay dung CDN cua no, khong gop."""
     imgs = list(_iter_images(node))
     yt = [x for x in imgs if _host(x[2]).endswith("ytimg.com")]
     if not yt:
         return ""
     return max(yt, key=lambda x: (x[0] * x[1], x[0], x[1]))[2]
 
+
 def _avatar_score(w, h, u):
     s = 0
     if _AV_TOKEN.search(u) or "-c-k-no" in u or "-c-k" in u:
-        s += 1000                       # token cat tron -> avatar, khong banner
+        s += 1000
     if w and h and w == h:
-        s += 100                        # vuong -> avatar
+        s += 100
     if w and h and w > h * 2:
-        s -= 1000                       # ngang ro ret -> banner, phat nang
+        s -= 1000
     return s
 
+
 def _pick_avatar(whole_json):
-    """Avatar kan = diem cao nhat trong nhom googleusercontent cua TOAN bo response.
-       Banner (ngang, khong token) bi -1000 loai; owner avatar tren card cung thuoc avatar
-       (cung asset) nen khong hai; header avatar resolution cao nhat thang. Path-free."""
     gu = [x for x in _iter_images(whole_json) if _host(x[2]).endswith("googleusercontent.com")]
     if not gu:
         return ""
     return max(gu, key=lambda x: (_avatar_score(x[0], x[1], x[2]), x[0] * x[1], x[0], x[1]))[2]
+
 
 def _video_id_of(d):
     v = d.get("videoId")
@@ -97,86 +91,93 @@ def _video_id_of(d):
         return v
     return ""
 
-def _collect(node, anchor, out, seen):
+
+def _looks_title(s):
+    return bool(s) and len(s) >= 8 and " " in s and not s.lower().startswith("http") \
+        and not s.replace(".", "").isdigit()
+
+
+def _walk_cards(node, st):
     if isinstance(node, dict):
         vid = _video_id_of(node)
-        child = node if vid else anchor
+        if vid and vid not in st["seen"]:
+            st["seen"].add(vid)
+            idx = st["n"]
+            st["n"] += 1
+            thumb = _pick_thumb(node)
+            tcode = None
+            disp = ""
+            for s in _iter_strings(node):
+                if not disp and _looks_title(s):
+                    disp = s
+                cs = code_sau_keyword_yt(s)
+                if cs:
+                    tcode = cs[0]
+                    disp = s
+                    break
+            card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
+                    "video_url": f"https://www.youtube.com/watch?v={vid}",
+                    "title": disp, "title_code": tcode}
+            if tcode:
+                st["coded"].append(card)
+            elif thumb:
+                st["bare"].append(card)
         for v in node.values():
-            _collect(v, child, out, seen)
+            _walk_cards(v, st)
     elif isinstance(node, list):
         for v in node:
-            _collect(v, anchor, out, seen)
-    elif isinstance(node, str):
-        if not C.YT_KEYWORD_RE.search(node):
-            return
-        cs = code_sau_keyword_yt(node)
-        if not cs:
-            log(f'YT: co "CODE CHUNG" nhung khong trich duoc code (token dau < CODE_MIN_LEN?): "{node[:90]}"')
-            return
-        code = cs[0]
-        vid = _video_id_of(anchor) if anchor else ""
-        key = vid if vid else ("S" + node)
-        if key in seen:
-            return
-        seen.add(key)
-        out.append({
-            "code": code,
-            "title": node.strip(),
-            "video_id": vid,
-            "video_url": f"https://www.youtube.com/watch?v={vid}" if vid else "",
-            "thumb_url": _pick_thumb(anchor) if anchor else "",
-        })
+            _walk_cards(v, st)
 
-def _dedup_by_code(entries, limit):
-    g = OrderedDict()
-    for e in entries:
-        c = e["code"]
-        cur = g.get(c)
-        if cur is None:
-            g[c] = e
-        elif (not cur.get("video_id")) and e.get("video_id"):
-            g[c] = e
-    return list(g.values())[:limit]
 
 def _via_data_api():
-    # Tra (entries|None|[], avatar). DataAPI playlist KHONG chua avatar kan -> avatar ''.
     if not C.YT_API_KEY:
-        return None, ""
+        return None, [], ""
     try:
         r = requests.get(C.DATA_API_PLAYLIST, params={
             "part": "snippet", "playlistId": C.YT_UPLOADS_ID,
             "maxResults": max(15, C.YT_VIDEO_SCAN * 5), "key": C.YT_API_KEY}, timeout=20)
     except Exception as e:
-        log("YT DataAPI exc:", e.__class__.__name__, e); return [], ""
+        log_yt("DataAPI loi mang:", e.__class__.__name__, e)
+        return [], [], ""
     if r.status_code != 200:
-        log("YT DataAPI http", r.status_code, "->", (r.text or "")[:200]); return [], ""
+        log_yt("DataAPI http", r.status_code, "->", (r.text or "")[:200])
+        return [], [], ""
     try:
         j = r.json()
     except Exception:
-        log("YT DataAPI khong phai JSON"); return [], ""
-    raw = []
-    for it in (j.get("items") or []):
+        log_yt("DataAPI khong phai JSON")
+        return [], [], ""
+    entries, bare = [], []
+    for i, it in enumerate(j.get("items") or []):
         sn = it.get("snippet") or {}
-        t = str(sn.get("title", "")).strip()
-        if not t or not C.YT_KEYWORD_RE.search(t):
-            continue
-        cs = code_sau_keyword_yt(t)
-        if not cs:
-            log(f'YT DataAPI: co "CODE CHUNG" nhung khong trich duoc code: "{t[:90]}"'); continue
+        title = str(sn.get("title", "")).strip()
+        desc = str(sn.get("description", "")).strip()
         rid = sn.get("resourceId") or {}
         vid = str(rid.get("videoId") or sn.get("videoId") or "")
         thumbs = sn.get("thumbnails") or {}
         thumb = _pick_thumb(thumbs) if isinstance(thumbs, dict) else ""
-        raw.append({"code": cs[0], "title": t, "video_id": vid,
-                    "video_url": f"https://www.youtube.com/watch?v={vid}" if vid else "",
-                    "thumb_url": thumb})
-    return _dedup_by_code(raw, C.YT_VIDEO_SCAN), ""
+        url = f"https://www.youtube.com/watch?v={vid}" if vid else ""
+        tc = code_sau_keyword_yt(title)
+        if tc:
+            entries.append({"code": tc[0], "title": title or f"Mã {tc[0]}", "video_id": vid,
+                            "video_url": url, "thumb_url": thumb, "via": "TITLE",
+                            "redeem": True, "idx": i})
+            continue
+        dc = code_from_ocr_text(desc)
+        if dc:
+            entries.append({"code": dc[0], "title": title or f"Mã {dc[0]}", "video_id": vid,
+                            "video_url": url, "thumb_url": thumb, "via": "DESC",
+                            "redeem": True, "idx": i})
+        elif thumb:
+            bare.append({"idx": i, "video_id": vid, "thumb_url": thumb,
+                         "video_url": url, "title": title})
+    return entries, bare, ""
+
 
 def _via_innertube():
-    # Tra (entries|None|[], avatar). Avatar TU lay tu chinh response nay (path-free heuristic).
     if not C.INNERTUBE_KEY:
-        log("YT InnerTube: khong co key (env + public deu trong) -> BO QUA tang B.")
-        return None, ""
+        log_warn("InnerTube: khong co key (env + public deu trong) -> BO QUA tang B.")
+        return None, [], ""
     body = {"context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
                                     "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
             "browseId": C.YT_CHANNEL_ID, "params": C.INNERTUBE_PARAMS_VIDEOS}
@@ -184,50 +185,81 @@ def _via_innertube():
         r = requests.post(C.INNERTUBE_BROWSE, params={"key": C.INNERTUBE_KEY, "prettyPrint": "false"},
                           json=body, headers={**_HDR, "Content-Type": "application/json"}, timeout=20)
     except Exception as e:
-        log("YT InnerTube exc:", e.__class__.__name__, e); return [], ""
+        log_yt("InnerTube loi mang:", e.__class__.__name__, e)
+        return [], [], ""
     txt = r.text or ""
-    log(f"YT InnerTube DIAG: http={r.status_code} len={len(txt)} videoId={txt.count(chr(34)+'videoId'+chr(34))}")
+    log_yt(f"Chuan doan InnerTube: http={r.status_code}, dai={len(txt)}, "
+           f"videoId={txt.count(chr(34) + 'videoId' + chr(34))}")
     if r.status_code != 200:
-        log("   body[:200]=", repr(txt[:200])); return [], ""
+        log_yt("   body[:200]=", repr(txt[:200]))
+        return [], [], ""
     try:
         j = r.json()
     except Exception:
-        log("   khong phai JSON; body[:200]=", repr(txt[:200])); return [], ""
+        log_yt("   khong phai JSON; body[:200]=", repr(txt[:200]))
+        return [], [], ""
     avatar = _pick_avatar(j)
-    out, seen = [], set()
-    _collect(j, None, out, seen)
-    log(f"   entry tho (truoc group) = {len(out)} | avatar auto = {'CO' if avatar else 'khong'}")
-    entries = _dedup_by_code(out, C.YT_VIDEO_SCAN)
-    for e in entries:
-        e["channel_avatar"] = avatar
-    return entries, avatar
+    st = {"seen": set(), "n": 0, "coded": [], "bare": []}
+    _walk_cards(j, st)
+    entries = [{"code": c["title_code"], "title": c["title"] or f"Mã {c['title_code']}",
+                "video_id": c["video_id"], "video_url": c["video_url"],
+                "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
+               for c in st["coded"]]
+    log_yt(f"   InnerTube: coded={len(entries)} (TITLE) | bare(ung vien OCR)={len(st['bare'])} "
+           f"| avatar tu dong = {'CO' if avatar else 'khong'}")
+    return entries, st["bare"], avatar
+
 
 def get_yt_candidates():
     global _dumped_once
     verbose = os.getenv("YT_VERBOSE", "0") == "1"
-    a, ava = _via_data_api()
-    b, avb = _via_innertube()          # LUON goi de co avatar + redundancy (1 POST/phut, nhe)
-    entries = a if a else b
-    via = "DATA_API" if a else ("INNERTUBE" if b else None)
-    if not entries:
-        sa = "khong key (BO QUA)" if a is None else "chay -> 0"
-        sb = "khong key (BO QUA)" if b is None else "chay -> 0"
-        log(f"YT: 0 code. DataAPI: {sa}; InnerTube: {sb}. "
-            f"(InnerTube mac dinh chay bang key public; neu 'BO QUA' kiem tra INNERTUBE_KEY config.)")
-        return []
-    avatar = (C.YT_CHANNEL_AVATAR or "").strip() or avb or ava   # override > auto(Innertube) > auto(DataAPI='')
-    for e in entries:
-        e["channel_avatar"] = avatar    # dam bao du entry tu DataAPI cung co key nay
+    a_e, a_b, ava = _via_data_api()
+    b_e, b_b, avb = _via_innertube()
+    pools_e = [x for x in (a_e, b_e) if x]
+    pools_b = [x for x in (a_b, b_b) if x]
+    if not pools_e and not pools_b:
+        sa = "khong key (BO QUA)" if a_e is None else "chay -> 0"
+        sb = "khong key (BO QUA)" if b_e is None else "chay -> 0"
+        log_yt(f"0 ma. DataAPI: {sa}; InnerTube: {sb}. (OCR mode={C.OCR_MODE}.)")
+        return [], []
+    by_vid = {}
+    for lst in pools_e:
+        for e in lst:
+            vid = e.get("video_id") or ("S" + e["code"])
+            cur = by_vid.get(vid)
+            if cur is None or e["idx"] < cur["idx"]:
+                by_vid[vid] = e
+    merged = sorted(by_vid.values(), key=lambda e: e["idx"])
+    seen, final = set(), []
+    for e in merged:
+        if e["code"] in seen:
+            continue
+        seen.add(e["code"])
+        final.append(e)
+    final = final[: C.YT_VIDEO_SCAN]
+    bb = {}
+    for lst in pools_b:
+        for c in lst:
+            cur = bb.get(c["video_id"])
+            if cur is None or c["idx"] < cur["idx"]:
+                bb[c["video_id"]] = c
+    bare = sorted(bb.values(), key=lambda c: c["idx"])[: C.OCR_MAX_IMAGES]
+    avatar = (getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip() or avb or ava
+    for e in final:
+        e["channel_avatar"] = avatar
+    for c in bare:
+        c["channel_avatar"] = avatar
     if verbose or not _dumped_once:
         _dumped_once = True
-        log(f"YT [{via}]: {len(entries)} VIDEO MOI NHAT CO 'CODE CHUNG' (toi da {C.YT_VIDEO_SCAN}):")
-        for i, e in enumerate(entries, 1):
-            tg = []
-            if not e.get("video_url"): tg.append("tran:no-videoId")
-            if not e.get("thumb_url"): tg.append("no-thumb")
-            if not e.get("channel_avatar"): tg.append("no-avatar")
-            tag = ("  [" + ",".join(tg) + "]") if tg else ""
-            log(f"   [{i:2}] {e['title'][:100]} -> `{e['code']}`{tag}")
+        log_yt(f"{len(final)} VIDEO MOI NHAT CO MA TEXT (toi da {C.YT_VIDEO_SCAN}):")
+        for i, e in enumerate(final, 1):
+            tg = [f"via={e.get('via')}"]
+            if not e.get("thumb_url"):
+                tg.append("no-thumb")
+            log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
+        log_yt(f"{len(bare)} VIDEO KHONG CO MA TEXT (ung vien OCR thumbnail):")
+        for i, c in enumerate(bare, 1):
+            log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
     else:
-        log(f"YT [{via}]: OK ({len(entries)} code tu {C.YT_VIDEO_SCAN} video moi nhat)")
-    return entries
+        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR)")
+    return final, bare
