@@ -17,19 +17,18 @@ def log(*a):
     print(f"[{datetime.now(timezone.utc).isoformat()}]", *a, flush=True)
 
 
-def log_yt(*a):    log("📺 [YT   ]", *a)   # tang YouTube: doc video, trich ma, OCR
-def log_api(*a):   log("🔌 [API  ]", *a)   # tang redeem: goi API VNG, ket qua
-def log_queue(*a): log("📦 [QUEUE]", *a)   # hang doi ma cho dong bo
-def log_state(*a): log("💾 [STATE]", *a)   # luu/push state + queue + ocr_memory
-def log_hook(*a):  log("📣 [HOOK ]", *a)   # Discord webhook
-def log_loop(*a):  log("🔁 [LOOP ]", *a)   # vong lap chinh, start/end, self-chain
-def log_brw(*a):   log("🌐 [BRW  ]", *a)   # browser fallback (chi khi USE_API=0)
-def log_warn(*a):  log("⚠️ [WARN ]", *a)   # canh bao khong lam dung bot
-def log_err(*a):   log("❌ [LOI  ]", *a)   # loi that, can xem
+def log_yt(*a):    log("📺 [YT   ]", *a)
+def log_api(*a):   log("🔌 [API  ]", *a)
+def log_queue(*a): log("📦 [QUEUE]", *a)
+def log_state(*a): log("💾 [STATE]", *a)
+def log_hook(*a):  log("📣 [HOOK ]", *a)
+def log_loop(*a):  log("🔁 [LOOP ]", *a)
+def log_brw(*a):   log("🌐 [BRW  ]", *a)
+def log_warn(*a):  log("⚠️ [WARN ]", *a)
+def log_err(*a):   log("❌ [LOI  ]", *a)
 
 
 def shot(page, tag):
-    """Chup anh trang khi browser fallback loi/captcha. Luu vao shots/."""
     try:
         d = os.path.join(os.getcwd(), "shots")
         os.makedirs(d, exist_ok=True)
