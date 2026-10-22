@@ -4,4 +4,4 @@ shots/*
 !shots/.gitignore
 .venv/
 auth.json
-# KHÔNG ignore code_da_nhap.txt / yt_queue.json / yt_channel_id.txt (là state, bot push ngược)
+# KHONG ignore code_da_nhap.txt / yt_queue.json / ocr_memory.json (la state, bot push nguoc)
