@@ -1,17 +1,11 @@
-# VONG LAP CHINH. API-first (USE_API=1 mac dinh -> khong mo browser).
-# Luong moi vong: (1) web-list (VN=rong) -> (2) YouTube: entries(ma text) + bare(ung vien OCR)
-# -> (3) queue + cooldown cho ma text -> (4) redeem ma text qua API -> (5) OCR self-correction
-# (neu OCR_MODE=auto) hoac OCR alert-only -> (6) webhook -> (7) commit state/queue/ocr_memory.
-# CHONG SPAM 2 LOP: lop1 state.py (pull-rebase + verify push); lop2 o day (ma stuck/retry/
-# non-redeemable KHONG pop khoi queue => run sau add_if_new=False => khong ALERT lai).
-# exit 0 = noi chuoi; exit 2 = dung chuoi.
+# VONG LAP CHINH. API-first. Luong: web-list (rong) -> YouTube (entries + bare) ->
+# queue+cooldown ma text -> redeem -> OCR (auto/alert) -> webhook -> commit state/queue/mem.
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config as C
 from src import ocr
-from src.utils import (log_loop, log_yt, log_api, log_queue, log_state, log_hook,
-                       log_warn, log_err, sleep, rand_ms)
+from src.utils import log_loop, log_queue, log_api, log_err, sleep, rand_ms
 from src.browser_session import BrowserSession
 from src.scraper import fetch_available_codes
 from src.redeemer import redeem_for_user
@@ -120,7 +114,6 @@ def main():
                 queue_dirty = False
                 run_stuck = None
 
-                # ===== Phat hien: watcher tra (entries, bare).
                 entries, bare = get_yt_candidates()
                 for e in entries:
                     code = e["code"]
@@ -133,7 +126,6 @@ def main():
                         log_queue(f"+ {code} (cho {YT_COOLDOWN}s dong bo) [via={e.get('via')}]")
                         send(msg_yt_alert(e, YT_COOLDOWN))
 
-                # ===== Duong web (VN = rong).
                 for c in codes_web:
                     rem, _, stk = process_code(session, c, users, state, source="web")
                     if c in queue:
@@ -143,7 +135,6 @@ def main():
                     if stk and not run_stuck:
                         run_stuck = stk
 
-                # ===== TEST_CODE.
                 if TEST_CODE and not is_code_fully_done(TEST_CODE, users, state):
                     log_api(f"TEST_CODE: ep nhap {TEST_CODE} (nguon=web -> khong doi cooldown)")
                     _, _, stk = process_code(session, TEST_CODE, users, state, source="web")
@@ -151,7 +142,6 @@ def main():
                     if stk and not run_stuck:
                         run_stuck = stk
 
-                # ===== Probe ma text da qua cooldown.
                 for c in list(queue.keys()):
                     if c in web_set:
                         continue
@@ -174,14 +164,13 @@ def main():
                             force_commit_yt_timeout(c, users, state)
                             queue.pop(c, None)
 
-                # ===== OCR: auto = vong tu sua; alert = chi bao 1 lan.
                 if C.OCR_MODE == "auto":
                     ocr.run_correction(users, state, bare, now)
                     touched = True
                 elif C.OCR_MODE == "alert":
                     ocr.alert_only(bare)
 
-                if YQ.prune_non_redeemable(queue, now, C.OCR_ALERT_TTL if hasattr(C, "OCR_ALERT_TTL") else 21600):
+                if YQ.prune_non_redeemable(queue, now, C.OCR_ALERT_TTL):
                     queue_dirty = True
 
                 if touched:
