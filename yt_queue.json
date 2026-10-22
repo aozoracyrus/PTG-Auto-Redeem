@@ -1,17 +1,12 @@
 {
-"PTMERGEHOTEL1029": {
-"first_seen": 1792678180.151736,
-"probes": 0,
-"redeem": true
-},
 "HALLOWEEN": {
 "first_seen": 1792678180.151736,
-"probes": 0,
+"probes": 1,
 "redeem": true
 },
 "BATPET": {
 "first_seen": 1792678180.151736,
-"probes": 0,
+"probes": 1,
 "redeem": true
 }
 }
