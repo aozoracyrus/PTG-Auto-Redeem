@@ -1,12 +1,16 @@
-# Camoufox lazy (chi mo khi USE_API=0). 1 context xuyen suot. reload()=F5; restart()=fp moi.
+# Giu 1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT (chi mo khi USE_API=0).
 import os
 from camoufox.sync_api import Camoufox
 from . import config as C
-from .utils import log
+from .utils import log_brw, log_err
+
 
 class BrowserSession:
     def __init__(self):
-        self._cm = None; self.browser = None; self.context = None; self.scan_page = None
+        self._cm = None
+        self.browser = None
+        self.context = None
+        self.scan_page = None
 
     def open(self):
         self._cm = Camoufox(headless=True, humanize=True, geoip=True, i_know_what_im_doing=True)
@@ -18,19 +22,25 @@ class BrowserSession:
             kw["storage_state"] = C.STORAGE_STATE
         self.context = self.browser.new_context(**kw)
         self.scan_page = self.context.new_page()
-        log(f"browser opened (locale={loc}, tz={tz}, mobile-viewport=yes, "
-            f"login={'yes' if C.STORAGE_STATE else 'no'})")
+        log_brw(f"Da mo browser (locale={loc}, tz={tz}, mobile-viewport=yes, "
+                f"login={'yes' if C.STORAGE_STATE else 'no'})")
 
     def close(self):
         try:
-            if self._cm: self._cm.__exit__(None, None, None)
-        except Exception as e: log("close loi", e)
-        finally: self._cm = self.browser = self.context = self.scan_page = None
+            if self._cm:
+                self._cm.__exit__(None, None, None)
+        except Exception as e:
+            log_err("Loi khi dong browser:", e)
+        finally:
+            self._cm = self.browser = self.context = self.scan_page = None
 
     def reload(self):
         self.scan_page.reload(wait_until="domcontentloaded", timeout=45000)
 
     def restart(self):
-        log("RESTART browser (xoa trinh duyet vao lai)"); self.close(); self.open()
+        log_brw("RESTART browser (xoa trinh duyet vao lai)")
+        self.close()
+        self.open()
 
-    def new_temp_page(self): return self.context.new_page()
+    def new_temp_page(self):
+        return self.context.new_page()
