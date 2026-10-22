@@ -27,10 +27,6 @@ jobs:
       YT_VERBOSE:       "0"
       DRY_RUN:          "0"
       TEST_CODE:        ""
-      # ----- OCR thumbnail: off | alert | auto -----
-      # auto = MAC DINH: vong tu sua (sai 2106 -> nho ma sai + doi recipe -> thu ma khac,
-      #        toi da OCR_MAX_TRIES lan; 2117 = ma dung het luot -> dung sua; het budget ->
-      #        vong sau tiep). OCR be tac -> PING OCR_PING_USER de nhap tay.
       OCR_MODE:         "auto"
       OCR_MAX_IMAGES:   "3"
       OCR_MAX_TRIES:    "50"
@@ -41,7 +37,7 @@ jobs:
       GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
       INNERTUBE_KEY:    ${{ secrets.INNERTUBE_KEY }}
       YT_API_KEY:       ${{ secrets.YT_API_KEY }}
-      OCR_PING_USER:    ${{ secrets.OCR_PING_USER }}   # tuy chon; trong -> dung ID mac dinh
+      OCR_PING_USER:    ${{ secrets.OCR_PING_USER }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: true }
@@ -54,8 +50,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Tesseract = bo may OCR. continue-on-error: OCR best-effort, thieu no thi tang OCR
-      # tra rong, bot VAN chay (khong do ca run).
       - name: Install tesseract OCR (best-effort)
         continue-on-error: true
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
