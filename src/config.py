@@ -1,5 +1,4 @@
-# TOAN BO CAU HINH. Phan nguoi doc (comment) = tieng Viet co dau.
-# Phan MAY DOC (ten hang, URL/regex/needle/env-name) = ASCII nguyen van, KHONG duoc dich.
+# TOAN BO CAU HINH. Comment = tieng Viet co dau; phan MAY DOC = ASCII nguyen van.
 import os, re
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
@@ -71,13 +70,8 @@ YT_CHANNEL_NAME   = "Play Together VNG"
 YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
-# ================= NEO TRICH MA (regex chi tiet trong parsers.py) =================
-# KW phu MOI cach viet chu "CODE": CODE, CÔ DÉ, CÔ.DÉ, CO DE, CODE:, CODE- ... (thumbnail
-# 10/29 viet stylized "CÔ DÉ PTMERGEHOTEL1029" -> OCR doc ra chu do; neo cu chi nhan
-# "CODE" nen bot mat ma). YT_KEYWORD_RE = KW tran -> pre-filter cho OCR.
-# Bien "CODE"/"CÔ DÉ" DON KHONG con chot so/prefix (lenh ban: lua edit CODE_PREFIXES) ->
-# chap nhan moi token >= CODE_MIN_LEN. Risk false-positive hiem ("CODE TOGETHER ...")
-# da ghi nhan trong parsers: ma gia an 2106 -> 5 probes -> 1 webhook failure roi thoai.
+# NEO TRICH MA: KW phu moi cach viet "CODE" ke ca stylized "CÔ DÉ" (thumbnail 10/10).
+# Chi tiet strict/join trong parsers.py. Bien DON khong con chot so/prefix (lenh ban).
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
 YT_KEYWORD_RE   = re.compile(KEYWORD_PATTERN, re.I)
 CODE_PREFIXES = ["PT"]
