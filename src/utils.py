@@ -1,5 +1,4 @@
-# Tien ich: log theo tang (emoji + nhan ASCII thang cot, noi dung tieng Viet co dau),
-# sleep, delay ngau nhien, screenshot khi browser fallback loi.
+# Log theo tang (emoji + nhan ASCII thang cot, noi dung tieng Viet co dau) + tien ich.
 import os, random, time
 from datetime import datetime, timezone
 
@@ -9,7 +8,6 @@ def sleep(sec):
 
 
 def rand_ms(lo, hi):
-    """Tra so giay ngau nhien trong [lo, hi] miligiay (delay chong captcha)."""
     return random.randint(int(lo), int(hi)) / 1000.0
 
 
