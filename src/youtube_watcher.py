@@ -1,7 +1,7 @@
 # NGUON MA CHO VN = API (BO RSS: 404 vinh vien; BO HTML: mobile shell rong). 2 tang:
-# A Data API v3 (can YT_API_KEY, doc duoc MO TA), B InnerTube (key public fallback).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC, redeem=True);
-# bare = video MOI NHAT KHONG co ma text nhung CO thumbnail (ung vien OCR).
+# A Data API v3 (can YT_API_KEY, doc MO TA), B InnerTube (key public fallback).
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video MOI NHAT
+# KHONG co ma text nhung CO thumbnail (ung vien OCR).
 # PHAN BIET ANH: thumb = CHU i.ytimg.com; avatar = CHU googleusercontent + token cat tron
 # + hinh vuong (loai banner ngang).
 import os, re, json, requests
