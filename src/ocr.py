@@ -1,7 +1,11 @@
-# OCR THUMBNAIL + VÒNG TỰ SỬA CO TRI NHO. tesseract TAT DINH -> "quet lai" phai = recipe
-# khac. 2106 -> blacklist tried[] + recipe moi -> thu ma khac (toi da OCR_MAX_TRIES=50,
-# cat boi OCR_LOOP_BUDGET=180s/vong). 2117 = ma DUNG het luot -> dung sua. BE TAC -> PING
-# OCR_PING_USER (1 lan/video) kem link video + thumbnail + ma da loai de NHAP TAY.
+# OCR THUMBNAIL + VÒNG TỰ SỬA CO TRI NHO.
+# CONG TU KHOA (chong spam): truoc vong sau, chay 2 recipe dau roi kiem tra text OCR tho
+#   co chua neo CODE / CÔ DÉ (C.YT_KEYWORD_RE). KHONG co -> anh khong co ma ->
+#   done="no_keyword" IM LANG (khong recipe them, KHONG ping, nho vao ocr_memory.json).
+#   CO chu CODE ma khong doc duoc ma -> moi vao vong tu sua (OCR_MAX_TRIES=50, cat boi
+#   OCR_LOOP_BUDGET=180s/vong) va ping 🆘 neu be tac (ping luc do CO LY DO).
+# tesseract TAT DINH -> "quet lai" phai = recipe khac. 2106 -> blacklist tried[] + recipe
+# moi. 2117 = ma DUNG het luot -> dung sua, chốt failure.
 import os, time, json, requests
 from collections import Counter
 from . import config as C
@@ -16,6 +20,7 @@ DMAX = int(os.getenv("DELAY_MAX", "30000"))
 
 MEM = lambda: os.path.join(os.getcwd(), "ocr_memory.json")
 _BYTES = {}
+_GATE_RECIPES = 2
 
 RECIPES = [
     (2, "gray"), (2, "inv"), (3, "gray"), (3, "inv"),
@@ -108,6 +113,19 @@ def _run_recipe(rec, idx):
     return cnt
 
 
+def _kw_present(rec):
+    if rec.get("reads"):
+        return True
+    return bool(C.YT_KEYWORD_RE.search((rec.get("raw") or "").upper()))
+
+
+def _gate(rec):
+    for i in range(_GATE_RECIPES):
+        if i not in rec["recipes_used"]:
+            _run_recipe(rec, i)
+    return _kw_present(rec)
+
+
 def _pick(rec):
     pool = [(c, n) for c, n in rec["reads"].items() if c not in rec["tried"]]
     if not pool:
@@ -190,13 +208,18 @@ def run_correction(users, state, bare_videos, now):
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done"):
             continue
+        if not _gate(rec):
+            rec["done"] = "no_keyword"
+            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua, khong ping")
+            changed = True
+            continue
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand = _ensure_candidate(rec)
             if cand is None:
                 rec["done"] = "exhausted"
-                log_warn(f"OCR can bien the cho {rec['video_id']} sau "
-                         f"{len(rec['recipes_used'])} recipe; da loai: {rec['tried']} -> PING nhap tay")
-                _ping(rec, "Đã thử hết mọi biến thể xử lý ảnh mà không còn mã nào chưa thử.")
+                log_warn(f"OCR co chu CODE nhung khong doc duoc ma ({rec['video_id']}) sau "
+                         f"{len(rec['recipes_used'])} recipe -> PING nhap tay")
+                _ping(rec, "Ảnh CÓ chữ CODE nhưng OCR không đọc được mã sau mọi biến thể.")
                 changed = True
                 break
             rec["tries"] += 1
@@ -244,7 +267,10 @@ def alert_only(bare_videos):
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done") or rec.get("alerts"):
             continue
-        _run_recipe(rec, 0)
+        if not _gate(rec):
+            rec["done"] = "no_keyword"
+            changed = True
+            continue
         cand = _pick(rec)
         _alert(rec, cand or "(chưa đọc được mã)",
                "Chế độ OCR = alert: bot CHỈ báo, không tự nhập. Xem thumbnail để xác nhận.",
