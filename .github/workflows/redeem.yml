@@ -24,7 +24,7 @@ jobs:
       YT_COOLDOWN:      "60"
       YT_MAX_PROBE:     "5"
       USE_API:          "1"
-      YT_VERBOSE:       "0"
+      YT_VERBOSE:       "1"      # dang test OCR nen bat; ve "0" khi chay that de log khong phinh
       DRY_RUN:          "0"
       TEST_CODE:        ""
       OCR_MODE:         "auto"
