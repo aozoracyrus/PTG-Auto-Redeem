@@ -1,5 +1,4 @@
-# BROWSER FALLBACK (chi khi USE_API=0). Dien ma+ID, chon server best-effort, bam nut,
-# poll ti so 1/1 vs 0/1. Captcha -> restart fingerprint moi, retry 1 lan.
+# BROWSER FALLBACK (chi khi USE_API=0). Dien ma+ID, chon server, bam nut, poll 1/1 vs 0/1.
 import time
 from . import config as C
 from .utils import log_api, log_warn, sleep, rand_ms, shot
