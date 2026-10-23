@@ -1,5 +1,5 @@
-# Lich su "MA|ID" (code_da_nhap.txt) + commit/push nguoc (runner ephemeral).
-# CHONG SPAM lop 1: pull --rebase --autostash TRUOC push + VERIFY exit code push.
+# Lich su "MA|ID" + commit/push nguoc. CHONG SPAM: pull --rebase --autostash TRUOC push
+# + VERIFY exit code push (truoc day push fail im lang -> mat state giua run).
 import os, subprocess
 from .utils import log_state, log_warn, log_err
 
