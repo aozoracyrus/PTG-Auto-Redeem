@@ -1,4 +1,4 @@
-# Giu 1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT (chi mo khi USE_API=0).
+# 1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT (chi mo khi USE_API=0).
 import os
 from camoufox.sync_api import Camoufox
 from . import config as C
