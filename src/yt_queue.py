@@ -1,5 +1,5 @@
-# Hang doi ma YouTube (yt_queue.json). Record mang "redeem": True = ma text (tu nhap);
-# False = alert-only (khong nhap, prune theo TTL). File hong -> tu chua '{}'.
+# Hang doi ma YouTube. Record "redeem": True = ma text (tu nhap); False = alert-only
+# (khong nhap, prune theo TTL). File hong -> tu chua '{}'.
 import os, json
 from .utils import log_queue, log_warn
 from .state import commit_paths
