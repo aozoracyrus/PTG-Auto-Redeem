@@ -1,5 +1,5 @@
-# DUONG CHINH REDEEM = goi thang API VNG (F12). Khong Cookie -> login OPTIONAL.
-# Phan quan = errorCode so (HTTP status khong quyet). Contract: success|failure|retry|stuck|captcha.
+# DUONG CHINH REDEEM = API VNG (F12). Khong Cookie -> login OPTIONAL.
+# Phan quan = errorCode so. Contract: success|failure|retry|stuck|captcha.
 import uuid, json, requests
 from . import config as C
 from .utils import log_api, log_warn
