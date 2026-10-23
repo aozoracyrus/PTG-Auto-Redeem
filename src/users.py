@@ -1,4 +1,4 @@
-# Doc id_user.txt -> danh sach ID. Moi dong 1 ID; chap nhan 'VN - ID' hoac ID tran; '#' comment.
+# Doc id_user.txt -> danh sach ID. Moi dong 1 ID; 'VN - ID' hoac ID tran; '#' comment.
 import os, re
 from . import config as C
 from .utils import log_warn
