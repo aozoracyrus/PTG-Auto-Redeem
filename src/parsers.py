@@ -1,50 +1,86 @@
 # TRICH MA GIFT TU TIEU DE / MO TA / TEXT OCR.
-# NEO (chuoi da .upper() truoc khi khop):
-#   KW = C[OÔ][\s.:|_-]*D[EÉ] -> phu moi cach viet: CODE, CÔ DÉ, CÔ.DÉ, CO DE, CODE:,
-#   CODE- ... Ly do: thumbnail 10/29 viet stylized "CÔ DÉ PTMERGEHOTEL1029" -> OCR doc ra
-#   "CÔ DÉ" chu khong phai "CODE"; neo cu chi nhan CODE nen bot mat ma (het han).
-#   Bien CHUNG: KW + "CHUNG" (invariant cu) + cho phep vụn <=5 ky tu xen giua -> token >= MIN.
-#   Bien DON  : KW + token >= MIN dinh ngay sau (± sep, hoac dinh lien voi OCR).
-# THEO LENH BAN ("dieU 1", lua edit CODE_PREFIXES): BO CHOT so/prefix o bien DON -> ca hai
-#   bien chap nhan moi token >= CODE_MIN_LEN. Danh doi (chap nhan co y thuc): title hiem
-#   kieu "CODE TOGETHER ..." se bi lay nham "TOGETHER" -> ma gia an 2106 -> 5 probes ->
-#   1 webhook failure roi thoai, KHONG mat ma that, KHONG lap. Con tu vun tieng Viet bi
-#   vo dau (MOI->M, CUA->C, VA->V, TRONG->5) van tu loai vi ngan hon CODE_MIN_LEN.
-# Thu tu uu tien: CHUNG truoc, DON sau; tra theo thu tu xuat hien de OCR lay consensus.
+#
+# BUG CAT MA DA SUA: ban cu co nhom "vun" tham lam giua neo va ma -> nuot 5 ky tu dau
+#   (PT26BATPET->BATPET, SWEETHALLOWEEN->HALLOWEEN) -> nhap ma cut -> 2106 -> spam probe.
+# LUA HIEN TAI (dung lenh ban: lay NGAY SAU neo, khong bo qua gi):
+#   1) STRICT: token [A-Z0-9]{>=CODE_MIN_LEN} DINH ngay sau neo (chi cho phep dau cach /
+#      dau cau). KHONG nhom vun => KHONG cat duoc ma.
+#   2) JOIN (CHI khi STRICT truot = anh OCR gian cach chu): ghep manh >=2 ky tu lien tiep,
+#      dung o manh 1 ky tu (chu Viet vo dau), uu tien mo dau prefix roi den chua so;
+#      ung vien ghep phai chua SO hoac mo dau prefix (chong rac GAMEPLAYTOGETHER).
+# NEO: KW = C[OÔ][\s.:|_-]*D[EÉ] phu CODE / CÔ DÉ / CÔ.DÉ / CO DE / CODE: ... ; tuy chon
+#   "CHUNG" di sau. Muon bo CÔ DÉ: _KW = r"CO[\s.:|_-]*DE".
 import re
 from . import config as C
 
 _MIN = int(getattr(C, "CODE_MIN_LEN", 6))
+_PREFIXES = [p.upper() for p in getattr(C, "CODE_PREFIXES", []) if p]
 _KW = r"C[OÔ][\s.:|_-]*D[EÉ]"
 
-_CHUNG_RE = re.compile(
-    r"(?<![A-Z0-9])" + _KW +
-    r"[\s:|_-]*CHUNG(?:[\s:|_-]+[A-Z0-9]{1,5})*[\s:|_-]*([A-Z0-9]{%d,})" % _MIN)
-_BARE_RE = re.compile(
-    r"(?<![A-Z0-9])" + _KW + r"[\s:|_-]*([A-Z0-9]{%d,})" % _MIN)
+_KW_POS_RE = re.compile(r"(?<![A-Z0-9])" + _KW + r"[\s:|_-]*(?:CHUNG[\s:|_-]*)?")
+_TOK_RE = re.compile(r"[A-Z0-9]{%d,}" % _MIN)
+_PIECE_RE = re.compile(r"[A-Z0-9]+")
+
+_JOIN_MAX_PIECES = 6
+_JOIN_MAX_LEN = 24
+
+
+def _guard(tok):
+    if any(ch.isdigit() for ch in tok):
+        return True
+    return any(tok.startswith(p) for p in _PREFIXES)
+
+
+def _join_candidates(rest):
+    pieces = _PIECE_RE.findall(rest[:80])
+    out = []
+    for i, p in enumerate(pieces):
+        if len(p) < 2:
+            continue
+        glued = ""
+        n = 0
+        for q in pieces[i:]:
+            if len(q) < 2:
+                break
+            glued += q
+            n += 1
+            if n >= _JOIN_MAX_PIECES or len(glued) >= _JOIN_MAX_LEN:
+                break
+        if len(glued) >= _MIN and glued not in out:
+            out.append(glued)
+    return out
+
+
+def _choose(joined):
+    for tok in joined:
+        if any(tok.startswith(p) for p in _PREFIXES):
+            return tok
+    for tok in joined:
+        if any(ch.isdigit() for ch in tok):
+            return tok
+    return ""
 
 
 def _all_candidates(t):
-    """Moi ung vien ma trong chuoi t (da .upper()), theo thu tu xuat hien, khong trung."""
-    hits = []
-    for m in _CHUNG_RE.finditer(t):
-        hits.append((m.start(), m.group(1)))
-    for m in _BARE_RE.finditer(t):
-        hits.append((m.start(), m.group(1)))
-    hits.sort(key=lambda x: x[0])
     out = []
-    for _, tok in hits:
-        if tok not in out:
+    for m in _KW_POS_RE.finditer(t):
+        rest = t[m.end():]
+        mt = _TOK_RE.match(rest)
+        if mt:
+            tok = mt.group(0)
+        else:
+            tok = _choose(_join_candidates(rest))
+            if tok and not _guard(tok):
+                tok = ""
+        if tok and tok not in out:
             out.append(tok)
     return out
 
 
 def code_sau_keyword_yt(title):
-    """Tra [ma] dau tien trich duoc tu title; [] neu khong co neo hop le."""
     cands = _all_candidates((title or "").upper())
     return [cands[0]] if cands else []
 
 
 def code_from_ocr_text(text):
-    """Tra TAT CA ung vien ma (thu tu xuat hien) tu mo ta video / text OCR."""
     return _all_candidates((text or "").upper())
