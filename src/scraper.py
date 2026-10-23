@@ -1,5 +1,5 @@
-# NGUON WEB-LIST CHO VN = KHONG TON TAI (trang /vn/redeem/ptg khong co nut xem danh sach
-# code; chi TH/EN co). Ham tra [] co dinh, log 1 lan. Giu lam seam mo rong.
+# NGUON WEB-LIST CHO VN = KHONG TON TAI (khong nut xem danh sach code). Stub tra [],
+# log 1 lan. Giu lam seam mo rong nguon web khac sau nay.
 from .utils import log_loop
 
 _logged = False
