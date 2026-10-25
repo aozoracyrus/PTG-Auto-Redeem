@@ -1,10 +1,19 @@
+# NGUON MA CHO VN = API (2 tang: Data API v3 + InnerTube public fallback).
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
+# KHONG co ma text nhung CO thumbnail (ung vien OCR).
+# SUA LAN NAY: LOAI LIVE STREAM khoi `bare`. Ly do: live luon dung dau danh sach video
+#   moi nhat -> chiem TRON OCR_MAX_IMAGES slot -> video ma-trong-anh (pill CO DE / CODE)
+#   nam sau, KHONG BAO GIO duoc OCR. Live hiem khi cat ma giftcode trong anh -> loc dung.
+#   (coded van giu live neu live co ma trong title, hiem nhung khong mat.)
+# PHAN BIET ANH: thumb = chu i.ytimg.com; avatar = chu googleusercontent + token cat tron
+#   + hinh vuong (loai banner ngang).
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt, code_from_desc_text
 from .utils import log_yt, log_warn
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+      "(KHTML, like Gecko) Chrome/126.0-0.0 Safari/537.36")
 _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _dumped_once = False
 _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -48,6 +57,31 @@ def _iter_strings(node):
             yield from _iter_strings(v)
     elif isinstance(node, str):
         yield node
+
+
+def _is_live_node(node):
+    """True neu node la LIVE stream: co liveStreamingDetails (dict) HOAC badge/overlay
+       style == 'LIVE'. Duyet de quy, ngay khi thay thi dung."""
+    hit = [False]
+
+    def walk(n):
+        if hit[0]:
+            return
+        if isinstance(n, dict):
+            if isinstance(n.get("liveStreamingDetails"), dict):
+                hit[0] = True
+                return
+            if n.get("style") == "LIVE":
+                hit[0] = True
+                return
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+
+    walk(node)
+    return hit[0]
 
 
 def _pick_thumb(node):
@@ -98,6 +132,7 @@ def _walk_cards(node, st):
             st["seen"].add(vid)
             idx = st["n"]
             st["n"] += 1
+            live = _is_live_node(node)
             thumb = _pick_thumb(node)
             tcode = None
             disp = ""
@@ -111,11 +146,13 @@ def _walk_cards(node, st):
                     break
             card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
                     "video_url": f"https://www.youtube.com/watch?v={vid}",
-                    "title": disp, "title_code": tcode}
+                    "title": disp, "title_code": tcode, "live": live}
             if tcode:
-                st["coded"].append(card)
-            elif thumb:
+                st["coded"].append(card)          # live co ma title van giu (hiem)
+            elif thumb and not live:              # <-- LOC LIVE khoi ung vien OCR
                 st["bare"].append(card)
+            elif live:
+                st["skipped_live"] = st.get("skipped_live", 0) + 1
         for v in node.values():
             _walk_cards(v, st)
     elif isinstance(node, list):
@@ -151,6 +188,7 @@ def _via_data_api():
         thumbs = sn.get("thumbnails") or {}
         thumb = _pick_thumb(thumbs) if isinstance(thumbs, dict) else ""
         url = f"https://www.youtube.com/watch?v={vid}" if vid else ""
+        live = bool(sn.get("liveStreamingDetails"))
         tc = code_sau_keyword_yt(title)
         if tc:
             entries.append({"code": tc[0], "title": title or f"Mã {tc[0]}", "video_id": vid,
@@ -162,7 +200,7 @@ def _via_data_api():
             entries.append({"code": dc[0], "title": title or f"Mã {dc[0]}", "video_id": vid,
                             "video_url": url, "thumb_url": thumb, "via": "DESC",
                             "redeem": True, "idx": i})
-        elif thumb:
+        elif thumb and not live:                  # <-- LOC LIVE
             bare.append({"idx": i, "video_id": vid, "thumb_url": thumb,
                          "video_url": url, "title": title})
     return entries, bare, ""
@@ -193,13 +231,14 @@ def _via_innertube():
         log_yt("   khong phai JSON; body[:200]=", repr(txt[:200]))
         return [], [], ""
     avatar = _pick_avatar(j)
-    st = {"seen": set(), "n": 0, "coded": [], "bare": []}
+    st = {"seen": set(), "n": 0, "coded": [], "bare": [], "skipped_live": 0}
     _walk_cards(j, st)
     entries = [{"code": c["title_code"], "title": c["title"] or f"Mã {c['title_code']}",
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    log_yt(f"   InnerTube: coded={len(entries)} | bare={len(st['bare'])} | avatar={'CO' if avatar else 'khong'}")
+    log_yt(f"   InnerTube: coded={len(entries)} | bare(upload, da loc live)={len(st['bare'])} "
+           f"| skipped_live={st.get('skipped_live', 0)} | avatar={'CO' if avatar else 'khong'}")
     return entries, st["bare"], avatar
 
 
@@ -250,9 +289,9 @@ def get_yt_candidates():
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} VIDEO KHONG CO MA TEXT (ung vien OCR):")
+        log_yt(f"{len(bare)} VIDEO UPLOAD KHONG MA TEXT = UNG VIEN OCR (live da loc):")
         for i, c in enumerate(bare, 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
     else:
-        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR)")
+        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR, live da loc)")
     return final, bare
