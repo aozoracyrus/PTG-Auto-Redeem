@@ -1,17 +1,20 @@
 # Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG embed V1).
-# Docs.discord.com/xac nhan (KB ban vua nap):
+# Docs KB (discord-webhook.com + docs.discord4j.com) xac nhan:
 #   (1) flags=32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
 #   (2) webhook BAT BUOC ?with_components=true -> thieu thi components bi bo qua (day la
 #       nguyen nhan 400 {"components":["0"]} ngay xua, khong phai schema sai).
-# CAU TRUC TIN CO ANH (docs Container allowed children = TextDisplay/Separator/Section/
-#   MediaGallery/ActionRow/File; max 10/container, ta dung 3):
+#   (3) Container(17) allowed children = TextDisplay/Separator/Section/MediaGallery/ActionRow/File;
+#       max 10 component/container (ta dung 3); TextDisplay content <=4000 ky tu; MediaGallery
+#       items <=10. accent_color = spine trai (vang/xanh/do/cam).
+# CAU TRUC TIN CO ANH (sua "thumbnail nho" + "footer o duoi" + "title Them vao danh sach cho"):
 #   Container(17){ accent_color, components:[
 #       Section(9){ TextDisplay(10)=noi dung, accessory=Thumbnail(11)=avatar },
 #       MediaGallery(12){ items:[ thumbnail ] },   <- 1 item = TO + click zoom (docs ghi ro)
 #       TextDisplay(10)=footer ]                    <- footer DUOI anh (yeu cau ban)
 #   }
-# accent_color = spine trai (vang/xanh/do/cam). AN TOAN: 400 -> log payload+body, fallback
-#   sang TextDisplay-only PHANG (van flags 32768 = V2, khong quay lai V1) de mat tin.
+# SUA "Them vao danh sach cho???": title rong -> LINK THUAN '[Xem video](url)', KHONG bia
+#   'Ma <code>' lam anchor (do la thu sinh placeholder YouTube client). Co title -> [title](url).
+# AN TOAN: 400 -> log payload+body, fallback TextDisplay-only PHANG (van flags 32768 = V2).
 import os, json, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
@@ -138,7 +141,7 @@ def msg_status(reason, n_pending):
 
 def msg_yt_alert(entry, cooldown_s):
     code   = entry.get("code", "")
-    title  = (entry.get("title") or f"Mã {code}").strip()
+    title  = (entry.get("title") or "").strip()
     vurl   = entry.get("video_url", "")
     thumb  = entry.get("thumb_url", "")
     avatar = (entry.get("channel_avatar") or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
@@ -146,8 +149,14 @@ def msg_yt_alert(entry, cooldown_s):
     src_label = {"TITLE": "tiêu đề", "DESC": "mô tả video",
                  "OCR": "ảnh thumbnail (OCR)"}.get(via, via)
 
+    # ===== SUA "Them vao danh sach cho???": title rong -> LINK THUAN, khong bia 'Ma <code>' =====
+    if title:
+        head_line = f"[{title}]({vurl})" if vurl else title
+    else:
+        head_line = f"[▶ Xem video]({vurl})" if vurl else "*(video không có tiêu đề)*"
+
     lines = ["**🔔 Phát hiện code mới (YouTube)**",
-             f"[{title}]({vurl})" if vurl else title,
+             head_line,
              f"Mã `{code}` — phát hiện qua **{src_label}** — đợi server sync ~{cooldown_s}s "
              f"trước khi nhập code tại [trang chủ quy đổi VNG]({C.URL_VN})"]
     if via == "OCR":
