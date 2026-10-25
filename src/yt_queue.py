@@ -1,5 +1,3 @@
-# Hang doi ma YouTube. Record "redeem": True = ma text (tu nhap); False = alert-only
-# (khong nhap, prune theo TTL). File hong -> tu chua '{}'.
 import os, json
 from .utils import log_queue, log_warn
 from .state import commit_paths
@@ -14,7 +12,7 @@ def load_queue():
     try:
         return json.load(open(fp, encoding="utf-8"))
     except Exception as e:
-        log_warn("yt_queue file hong -> tu ghi lai '{}':", e)
+        log_warn("yt_queue hong -> tu ghi lai '{}':", e)
         try:
             save_queue({})
         except Exception as e2:
