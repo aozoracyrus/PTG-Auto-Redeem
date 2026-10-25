@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN (API-first + YouTube + OCR Gemini/EasyOCR)
+name: PTG Auto Redeem VN (API-first + YouTube + OCR Gemini/EasyOCR fallback)
 
 on:
   workflow_dispatch: {}
@@ -24,16 +24,21 @@ jobs:
       YT_COOLDOWN:      "60"
       YT_MAX_PROBE:     "5"
       USE_API:          "1"
-      YT_VERBOSE:       "0"
+      YT_VERBOSE:       "0"      # bat 1 de debug; ve 0 khi chay that
       DRY_RUN:          "0"
       TEST_CODE:        ""
       OCR_MODE:         "auto"
-      # auto = Gemini (neu co GEMINI_API_KEY) > EasyOCR > Tesseract. Ep bang "gemini"/"easy"/"tess".
+      # auto = Gemini (khi GEMINI_API_KEY co VA 'gemini-3.8-flash' nam trong list /v1beta/models
+      #        cua key) > EasyOCR > Tesseract. Ep "gemini"/"easy"/"tess" de bo qua Gemini.
       OCR_ENGINE:       "auto"
-      GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}   # lay mien phi tai Google AI Studio
-      GEMINI_MODEL:     "gemini-2.5-flash"
+      GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}   # AI Studio > Get API key
+      # Optional override. De TRONG thi dung default 'gemini-3.8-flash' (van dc validate qua
+      # list API truoc khi goi -> sai ten/billed/het free thi TU VE local, khong 404 lap,
+      # khong phi runaway). Chi dat khi Google doi ten va muon ghi de tam.
+      GEMINI_MODEL:     ${{ secrets.GEMINI_MODEL }}
       GEMINI_TIMEOUT:   "45"
-      OCR_MAX_IMAGES:   "8"     # TAM test; ve 3 sau khi thay Gemini doc DUNG ma trong anh
+      GEMINI_MAX_CALLS: "12"     # tran generate/run = luoi an toan $; cham -> local
+      OCR_MAX_IMAGES:   "8"      # TAM test; ve 3 sau khi thay Gemini doc DUNG ma trong anh
       OCR_MAX_TRIES:    "50"
       OCR_LOOP_BUDGET:  "180"
       OCR_ALERT_CAP:    "6"
@@ -50,8 +55,9 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
-      # Torch CPU chi de phuc vu EasyOCR/Tesseract FALLBACK offline. Gemini (uu tien) la
-      # API remote -> khong can torch; nhung giu fallback de khi het key/quota van chay.
+      # Torch CPU chi phuc vu EasyOCR/Tesseract FALLBACK — tuc la duong ray khi Gemini chet.
+      # Gemini (uu tien) la API remote -> khong can torch; nhung GIU fallback de he thong
+      # song du khi Gemini khong kha dung (sai ten/billed/het free/loi mang).
       - name: Install torch (CPU only, cho fallback)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
