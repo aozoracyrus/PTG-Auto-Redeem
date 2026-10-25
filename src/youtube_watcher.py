@@ -1,12 +1,6 @@
-# NGUON MA CHO VN = API (BO RSS: 404 vinh vien; BO HTML: mobile shell rong). 2 tang:
-# A Data API v3 (can YT_API_KEY, doc MO TA), B InnerTube (key public fallback).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video MOI NHAT
-# KHONG co ma text nhung CO thumbnail (ung vien OCR).
-# PHAN BIET ANH: thumb = CHU i.ytimg.com; avatar = CHU googleusercontent + token cat tron
-# + hinh vuong (loai banner ngang).
 import os, re, json, requests
 from . import config as C
-from .parsers import code_sau_keyword_yt, code_from_ocr_text
+from .parsers import code_sau_keyword_yt, code_from_desc_text
 from .utils import log_yt, log_warn
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -163,7 +157,7 @@ def _via_data_api():
                             "video_url": url, "thumb_url": thumb, "via": "TITLE",
                             "redeem": True, "idx": i})
             continue
-        dc = code_from_ocr_text(desc)
+        dc = code_from_desc_text(desc)
         if dc:
             entries.append({"code": dc[0], "title": title or f"Mã {dc[0]}", "video_id": vid,
                             "video_url": url, "thumb_url": thumb, "via": "DESC",
@@ -176,7 +170,7 @@ def _via_data_api():
 
 def _via_innertube():
     if not C.INNERTUBE_KEY:
-        log_warn("InnerTube: khong co key (env + public deu trong) -> BO QUA tang B.")
+        log_warn("InnerTube: khong co key -> BO QUA tang B.")
         return None, [], ""
     body = {"context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
                                     "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
@@ -205,8 +199,7 @@ def _via_innertube():
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    log_yt(f"   InnerTube: coded={len(entries)} (TITLE) | bare(ung vien OCR)={len(st['bare'])} "
-           f"| avatar tu dong = {'CO' if avatar else 'khong'}")
+    log_yt(f"   InnerTube: coded={len(entries)} | bare={len(st['bare'])} | avatar={'CO' if avatar else 'khong'}")
     return entries, st["bare"], avatar
 
 
@@ -257,7 +250,7 @@ def get_yt_candidates():
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} VIDEO KHONG CO MA TEXT (ung vien OCR thumbnail):")
+        log_yt(f"{len(bare)} VIDEO KHONG CO MA TEXT (ung vien OCR):")
         for i, c in enumerate(bare, 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
     else:
