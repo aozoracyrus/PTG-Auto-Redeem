@@ -1,19 +1,19 @@
-# NGUON MA CHO VN = API (2 tang: Data API v3 + InnerTube public fallback).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
-# KHONG co ma text nhung CO thumbnail (ung vien OCR).
-# SUA LAN NAY: LOAI LIVE STREAM khoi `bare`. Ly do: live luon dung dau danh sach video
-#   moi nhat -> chiem TRON OCR_MAX_IMAGES slot -> video ma-trong-anh (pill CO DE / CODE)
-#   nam sau, KHONG BAO GIO duoc OCR. Live hiem khi cat ma giftcode trong anh -> loc dung.
-#   (coded van giu live neu live co ma trong title, hiem nhung khong mat.)
-# PHAN BIET ANH: thumb = chu i.ytimg.com; avatar = chu googleusercontent + token cat tron
-#   + hinh vuong (loai banner ngang).
+# NGUON MA CHO VN = API (Data API v3 + InnerTube public fallback).
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video KHONG co
+#   ma text nhung CO thumbnail = UNG VIEN OCR.
+# SUA LAN NAY (nhan loi): BO _is_live_node. Ham do phong doan cau truc InnerTube
+#   (liveStreamingDetails / style=="LIVE") -> skipped_live=0 = hong hoan toan, va nhan log
+#   "live da loc" tung ho mot tinh nang khong chay. Live KHONG can loc bang field: OCR gate
+#   (da chung minh chay dung) tu chan live im lang (anh live khong co chu CODE). Van de that
+#   la quota bi ap TRUOC gate -> live dung dau an het slot. Nay: bare tra VE KHONG CAT, va
+#   ocr.py ap quota SAU gate (chi video PASS gate moi tinh slot). -> khong con phong doan.
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt, code_from_desc_text
 from .utils import log_yt, log_warn
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0-0.0 Safari/537.36")
+      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _dumped_once = False
 _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -57,31 +57,6 @@ def _iter_strings(node):
             yield from _iter_strings(v)
     elif isinstance(node, str):
         yield node
-
-
-def _is_live_node(node):
-    """True neu node la LIVE stream: co liveStreamingDetails (dict) HOAC badge/overlay
-       style == 'LIVE'. Duyet de quy, ngay khi thay thi dung."""
-    hit = [False]
-
-    def walk(n):
-        if hit[0]:
-            return
-        if isinstance(n, dict):
-            if isinstance(n.get("liveStreamingDetails"), dict):
-                hit[0] = True
-                return
-            if n.get("style") == "LIVE":
-                hit[0] = True
-                return
-            for v in n.values():
-                walk(v)
-        elif isinstance(n, list):
-            for v in n:
-                walk(v)
-
-    walk(node)
-    return hit[0]
 
 
 def _pick_thumb(node):
@@ -132,7 +107,6 @@ def _walk_cards(node, st):
             st["seen"].add(vid)
             idx = st["n"]
             st["n"] += 1
-            live = _is_live_node(node)
             thumb = _pick_thumb(node)
             tcode = None
             disp = ""
@@ -146,13 +120,11 @@ def _walk_cards(node, st):
                     break
             card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
                     "video_url": f"https://www.youtube.com/watch?v={vid}",
-                    "title": disp, "title_code": tcode, "live": live}
+                    "title": disp, "title_code": tcode}
             if tcode:
-                st["coded"].append(card)          # live co ma title van giu (hiem)
-            elif thumb and not live:              # <-- LOC LIVE khoi ung vien OCR
+                st["coded"].append(card)
+            elif thumb:                      # KHONG loc live o day; gate lo sau
                 st["bare"].append(card)
-            elif live:
-                st["skipped_live"] = st.get("skipped_live", 0) + 1
         for v in node.values():
             _walk_cards(v, st)
     elif isinstance(node, list):
@@ -188,7 +160,6 @@ def _via_data_api():
         thumbs = sn.get("thumbnails") or {}
         thumb = _pick_thumb(thumbs) if isinstance(thumbs, dict) else ""
         url = f"https://www.youtube.com/watch?v={vid}" if vid else ""
-        live = bool(sn.get("liveStreamingDetails"))
         tc = code_sau_keyword_yt(title)
         if tc:
             entries.append({"code": tc[0], "title": title or f"Mã {tc[0]}", "video_id": vid,
@@ -200,7 +171,7 @@ def _via_data_api():
             entries.append({"code": dc[0], "title": title or f"Mã {dc[0]}", "video_id": vid,
                             "video_url": url, "thumb_url": thumb, "via": "DESC",
                             "redeem": True, "idx": i})
-        elif thumb and not live:                  # <-- LOC LIVE
+        elif thumb:
             bare.append({"idx": i, "video_id": vid, "thumb_url": thumb,
                          "video_url": url, "title": title})
     return entries, bare, ""
@@ -231,14 +202,15 @@ def _via_innertube():
         log_yt("   khong phai JSON; body[:200]=", repr(txt[:200]))
         return [], [], ""
     avatar = _pick_avatar(j)
-    st = {"seen": set(), "n": 0, "coded": [], "bare": [], "skipped_live": 0}
+    st = {"seen": set(), "n": 0, "coded": [], "bare": []}
     _walk_cards(j, st)
     entries = [{"code": c["title_code"], "title": c["title"] or f"Mã {c['title_code']}",
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    log_yt(f"   InnerTube: coded={len(entries)} | bare(upload, da loc live)={len(st['bare'])} "
-           f"| skipped_live={st.get('skipped_live', 0)} | avatar={'CO' if avatar else 'khong'}")
+    # Nhan log TRUNG THUC: khong con "da loc live" (khong loc nua).
+    log_yt(f"   InnerTube: coded={len(entries)} | bare(ung vien OCR, CHUA xet gate)={len(st['bare'])} "
+           f"| avatar={'CO' if avatar else 'khong'}")
     return entries, st["bare"], avatar
 
 
@@ -275,7 +247,9 @@ def get_yt_candidates():
             cur = bb.get(c["video_id"])
             if cur is None or c["idx"] < cur["idx"]:
                 bb[c["video_id"]] = c
-    bare = sorted(bb.values(), key=lambda c: c["idx"])[: C.OCR_MAX_IMAGES]
+    # KHONG cat bare o day: quota OCR_MAX_IMAGES se duoc ap SAU gate trong ocr.py,
+    # de live/trailer (gate fail, im lang) khong an slot cua video ma-trong-anh.
+    bare = sorted(bb.values(), key=lambda c: c["idx"])
     avatar = (getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip() or avb or ava
     for e in final:
         e["channel_avatar"] = avatar
@@ -289,9 +263,12 @@ def get_yt_candidates():
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} VIDEO UPLOAD KHONG MA TEXT = UNG VIEN OCR (live da loc):")
-        for i, c in enumerate(bare, 1):
+        log_yt(f"{len(bare)} UNG VIEN OCR (se duoc gate chan neu khong co chu CODE; "
+               f"chi video PASS gate moi tinh vao quota {C.OCR_MAX_IMAGES}):")
+        for i, c in enumerate(bare[:12], 1):   # dump 12 dau du nhin, khong spam log
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
+        if len(bare) > 12:
+            log_yt(f"   ... con {len(bare)-12} nua (khong dump)")
     else:
-        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR, live da loc)")
+        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR choi gate)")
     return final, bare
