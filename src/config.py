@@ -23,7 +23,7 @@ NUM_TRANSIENT  = {1000, 1001, 2103}
 NUM_VALIDATION = {1002}
 HTTP_STUCK = {403, 404, 408, 425, 429, 500, 501, 502, 503, 504}
 
-# ================= MATCHER UI (fallback) =================
+# ================= MATCHER UI (chi khi USE_API=0) =================
 PH_CODE = ["Nhập thông tin code", "Nhập mã giftcode"]
 PH_ID   = ["Chọn nhân vật / Nhập ID nhân vật", "Nhập ID nhân vật"]
 BTN_REDEEM = re.compile(r"Nhập\s*code|Redeem", re.I)
@@ -34,7 +34,7 @@ RATIO_OK   = "1/1"
 SRV_PH = ["Máy chủ", "Chọn máy chủ", "Server"]
 SRV_OPT_RE = re.compile(r"Server\s*2|Máy chủ\s*2", re.I)
 
-# ================= TABLE TEXT =================
+# ================= TABLE TEXT = CHUOI KHOP MESSAGE SERVER (KHONG DICH) =================
 TRANSIENT       = ["đã có lỗi xảy ra", "thử lại sau ít phút", "không tìm thấy dữ liệu yêu cầu",
                    "không thể tải thông tin game", "vui lòng thử lại sau"]
 NEED_LOGIN      = ["chưa liên kết tài khoản game", "liên kết tài khoản rồi thử lại"]
@@ -54,8 +54,7 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-# TAM = 15 de TEST OCR; sau khi thay Gemini doc DUNG ma trong anh -> RU VE 3.
-YT_VIDEO_SCAN = 15
+YT_VIDEO_SCAN = 15          # TAM test OCR; ve 3 sau khi thay Gemini doc DUNG ma trong anh
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
@@ -68,32 +67,35 @@ YT_CHANNEL_NAME   = "Play Together VNG"
 YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
-# ================= NEO TRICH MA =================
+# ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
 YT_KEYWORD_RE   = re.compile(KEYWORD_PATTERN, re.I)
 CODE_PREFIXES = ["PT"]
 CODE_MIN_LEN  = 6
 
 # ================= OCR: GEMINI (uu tien) > EASYOCR > TESSERACT =================
-# Gemini la vision-LLM -> doc font cach dieu / do bong / tieng Viet co dau ma EasyOCR/Tesseract
-#   bo sot (pill "CO.DE PTMERGEHOTEL1029"). Goi qua REST (requests) de on dinh + khong them
-#   dependency nang. Khong co key / loi mang -> tu fallback EasyOCR roi Tesseract (offline).
-# OCR_ENGINE: auto = gemini(neu co key) > easy > tess | ep bang "gemini"/"easy"/"tess".
+# TRIET LY "SO GEMINI KHONG KHA DUNG": he thong KHONG can Gemini song. Moi nghia "khong
+#   kha dung" (sai ten voi key nay / key billed / het free-tier / loi mang / cham tran)
+#   deu bi trung hoa bang fallback local o ocr.py. Ten 'gemini-3.8-flash' o day la DEFAULT
+#   DA DC XAC NHAN bang trang pricing chinh thuc Google (KB), nhung VAN di qua lop validate
+#   GET /v1beta/models cua chinh key truoc khi goi -> hardcode lan nay CO LUOI, khong giong
+#   3 lan truoc (hardcode roi tin). Muon doi tam -> dat secret GEMINI_MODEL (secret thang default).
+# OCR_ENGINE: auto = gemini(neu key co + ten nam trong list API) > easy > tess | ep "gemini"/"easy"/"tess".
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL    = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash")
+GEMINI_MODEL    = (os.getenv("GEMINI_MODEL") or "").strip() or "gemini-3.8-flash"
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
-# TAM = 8 de TEST; sau khi OCR doc DUNG -> RU VE 3.
-OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "8"))
+GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "12"))   # tran goi/run = luoi an toan $
+OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "8"))       # TAM test; ve 3 sau khi OK
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
 OCR_ALERT_CAP   = int(os.getenv("OCR_ALERT_CAP", "6"))
 OCR_ALERT_TTL   = 21600
 OCR_PING_USER   = (os.getenv("OCR_PING_USER", "").strip() or "1160199218313564210")
 
-# ================= BROWSER FALLBACK =================
+# ================= BROWSER FALLBACK (chi khi USE_API=0) =================
 LOCALE = ("vi-VN", "Asia/Ho_Chi_Minh")
 STORAGE_STATE = None
 MOBILE_VIEWPORT = {"width": 390, "height": 844}
