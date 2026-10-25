@@ -1,14 +1,15 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
-# ENGINE: EasyOCR (chinh) + tesseract (fallback).
-# QUY THUAT QUOTA (sua loi "live chiem slot"): duet TOAN bo bare (khong cat truoc), chay
-#   gate (2 recipe) cho tung video CHUA done. Gate FAIL (anh khong co chu CODE: live,
-#   trailer, ...) -> done="no_keyword" IM LANG, KHONG tinh vao quota. Gate PASS (anh CO
-#   chu CODE) -> MOI tinh quota va vao vong tu sau; du OCR_MAX_IMAGES video pass-gate thi
-#   dung (phan con lai vong sau, idempotent qua ocr_memory). -> live/trailer khong bao gio
-#   day video ma-trong-anh ra ngoai, va KHONG can phan-loai live bang field (da bo _is_live_node).
-# 2106 -> blacklist tried[] + recipe moi; 2117 = ma DUNG het luot -> dung sua, chot failure.
-# Be tac (het recipe / du luot ma van sai) -> ping OCR_PING_USER (1 lan/video).
-import os, time, json, requests
+# THU TU ENGINE (quyet boi config.OCR_ENGINE + GEMINI_API_KEY):
+#   GEMINI  : vision-LLM, gui ANH GOC (khong preprocess), 1 lan/video. Doc font cach dieu /
+#             do bong / tieng Viet co dau -> day la ly do chinh them no ve day.
+#   EASYOCR : offline, chay qua RECIPES (phong to/dao mau/binarize) nhu cu.
+#   TESS    : offline, fallback cuoi.
+# QUY LUAT CHUYEN TIEP: neu engine uu tien LOI (mang/HTTP/parse -> tra None) thi moi roi
+#   xuong engine ke tiep. Neu engine chay OK nhung anh khong chu -> tra [] (khong roi, vi
+#   da hoi dung engine). Gate (cong tu khoa CODE/CO DE) van dung de chan live/trailer im
+#   lang, KHONG tinh quota; chi video PASS gate moi vao vong sau + co the ping be tac.
+# 2106 -> blacklist tried[] + candidate ke tiep; 2117 = ma DUNG het luot -> dung sua.
+import os, io, time, json, base64, requests
 from collections import Counter
 from . import config as C
 from .parsers import code_from_ocr_text
@@ -19,7 +20,6 @@ from .api_redeemer import redeem_via_api
 
 DMIN = int(os.getenv("DELAY_MIN", "15000"))
 DMAX = int(os.getenv("DELAY_MAX", "30000"))
-OCR_ENGINE = os.getenv("OCR_ENGINE", "auto").strip().lower()
 
 MEM = lambda: os.path.join(os.getcwd(), "ocr_memory.json")
 _BYTES = {}
@@ -33,25 +33,102 @@ RECIPES = [
     (2, "sharp"), (3, "sharp"), (4, "bin"), (5, "gray"),
 ]
 
+# Prompt chong bai: cam suy doan, cam sua chinh ta, giu dau + hoa/thuong, moi chuoi 1 dong.
+_GEMINI_PROMPT = (
+    "Ban la cong cu trich xuat chu (OCR) tu anh thumbnail game. Nhiem vu: liet ke CHINH XAC "
+    "moi chuoi chu (tieng Viet co dau va tieng Anh) THUC SU nhin thay trong anh, ke ca chu "
+    "cach dieu, chu co do bong, chu trong khung/nut/pill. Quy tac bat buoc: "
+    "(1) CHI ghi chu thuc su thay, TUYET DOI khong suy doan, khong bia, khong sua loi chinh ta, "
+    "khong them chu khong co. "
+    "(2) Moi chuoi nam tren MOT dong rieng. "
+    "(3) Giu nguyen viet hoa/thuong va dau tieng Viet. "
+    "(4) Neu thay cum 'CODE' hoac 'CO DE' dung canh mot chuoi ma, ghi nguyen ven chuoi ma do "
+    "tren cung dong (khong tach roi). "
+    "(5) Khong giai thich, khong mo dau, chi tra danh sach dong."
+)
 
+
+def _gemini_active():
+    return bool(C.GEMINI_API_KEY) and C.OCR_ENGINE in ("auto", "gemini")
+
+
+def _gemini_call(png_bytes):
+    """Goi Gemini REST tren anh PNG. Tra list[str] (1 text block) khi OK, None khi loi."""
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    body = {"contents": [{"parts": [
+        {"inline_data": {"mime_type": "image/png", "data": b64}},
+        {"text": _GEMINI_PROMPT},
+    ]}]}
+    url = f"{C.GEMINI_ENDPOINT}/{C.GEMINI_MODEL}:generateContent?key={C.GEMINI_API_KEY}"
+    try:
+        r = requests.post(url, json=body, timeout=C.GEMINI_TIMEOUT)
+    except Exception as e:
+        log_warn("Gemini loi mang:", e.__class__.__name__)
+        return None
+    if r.status_code != 200:
+        log_warn("Gemini http", r.status_code, "->", (r.text or "")[:200])
+        return None
+    try:
+        j = r.json()
+    except Exception:
+        log_warn("Gemini khong phai JSON")
+        return None
+    cands = j.get("candidates") or []
+    if not cands:                      # bi chan safety / rong -> coi nhu loi, de fallback
+        log_warn("Gemini khong tra candidate (safety/rong) -> fallback local")
+        return None
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    txt = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    return [txt] if txt else []
+
+
+def _gemini_pass(rec):
+    """Doc anh GOC bang Gemini 1 lan, nap candidate vao rec['reads']/rec['raw']. Idempotent."""
+    if rec.get("gemini_done"):
+        return
+    rec["gemini_done"] = True
+    b = _fetch_bytes(rec["thumb"])
+    if not b:
+        return
+    try:
+        from PIL import Image
+        pil = Image.open(io.BytesIO(b)).convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="PNG")
+        png = buf.getvalue()
+    except Exception as e:
+        log_warn("Gemini: khong doc duoc anh goc:", e.__class__.__name__)
+        return
+    texts = _gemini_call(png)
+    if texts is None:                  # loi -> de _gate/_ensure roi xuong local
+        rec["gemini_done"] = False     # cho phep local chay sau
+        return
+    for txt in texts:
+        if txt.strip():
+            rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
+        for c in code_from_ocr_text(txt):
+            rec["reads"][c] = rec["reads"].get(c, 0) + 1
+
+
+# ---------------- local engines (EasyOCR > Tesseract) ----------------
 def _easy_reader():
     global _READER, _READER_FAILED
     if _READER is not None:
         return _READER
-    if _READER_FAILED or OCR_ENGINE == "tess":
+    if _READER_FAILED or C.OCR_ENGINE == "tess":
         return None
     try:
         import easyocr
         _READER = easyocr.Reader(["en"], gpu=False, verbose=False)
-        log_yt("EasyOCR san sang (engine chinh)")
+        log_yt("EasyOCR san sang (fallback local)")
     except Exception as e:
         _READER_FAILED = True
-        log_warn("EasyOCR khong kha dung -> fallback tesseract:", e.__class__.__name__)
+        log_warn("EasyOCR khong kha dung -> tesseract:", e.__class__.__name__)
         _READER = None
     return _READER
 
 
-def _ocr_texts(img):
+def _ocr_texts_local(img):
     r = _easy_reader()
     if r is not None:
         try:
@@ -96,7 +173,8 @@ def commit_mem(mem):
 def _new_rec(v):
     return {"video_id": v["video_id"], "thumb": v["thumb_url"], "title": v.get("title", ""),
             "video_url": v.get("video_url", ""), "recipes_used": [], "reads": {},
-            "raw": "", "tried": [], "tries": 0, "alerts": 0, "done": None, "pinged": False}
+            "raw": "", "tried": [], "tries": 0, "alerts": 0, "done": None, "pinged": False,
+            "gemini_done": False}
 
 
 def _fetch_bytes(url):
@@ -127,24 +205,23 @@ def _apply_recipe(pil, up, kind):
     return img
 
 
-def _run_recipe(rec, idx):
+def _run_recipe_local(rec, idx):
     from PIL import Image
-    import io as _io
     b = _fetch_bytes(rec["thumb"])
     if not b:
         rec["recipes_used"].append(idx)
         return Counter()
     try:
-        pil = Image.open(_io.BytesIO(b)).convert("RGB")
+        pil = Image.open(io.BytesIO(b)).convert("RGB")
     except Exception:
         rec["recipes_used"].append(idx)
         return Counter()
     up, kind = RECIPES[idx]
     img = _apply_recipe(pil, up, kind)
     cnt = Counter()
-    for txt in _ocr_texts(img):
+    for txt in _ocr_texts_local(img):
         if txt.strip():
-            rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:600]
+            rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
@@ -159,9 +236,16 @@ def _kw_present(rec):
 
 
 def _gate(rec):
+    """Chan video khong co chu CODE/CO DE (live/trailer) -> im lang, khong tinh quota.
+       Gemini: 1 lan anh goc. Local: 2 recipe dau. Neu Gemini loi (gemini_done reset) -> local."""
+    if _gemini_active():
+        _gemini_pass(rec)
+        if rec.get("gemini_done"):
+            return _kw_present(rec)
+        # Gemini loi -> roi xuong local ben duoi
     for i in range(_GATE_RECIPES):
         if i not in rec["recipes_used"]:
-            _run_recipe(rec, i)
+            _run_recipe_local(rec, i)
     return _kw_present(rec)
 
 
@@ -173,13 +257,26 @@ def _pick(rec):
 
 
 def _ensure_candidate(rec):
+    """Tra candidate chua thu. Gemini: chi doc 1 lan (anh goc), khong co recipe khac.
+       Local: quay tiep RECIPES cho den khi ra candidate moi het recipe."""
+    if _gemini_active():
+        _gemini_pass(rec)
+        if rec.get("gemini_done"):
+            return _pick(rec)
+        # Gemini loi -> local ben duoi
     while True:
         cand = _pick(rec)
         if cand is not None:
             return cand
         if len(rec["recipes_used"]) >= len(RECIPES):
             return None
-        _run_recipe(rec, len(rec["recipes_used"]))
+        _run_recipe_local(rec, len(rec["recipes_used"]))
+
+
+def _engine_label():
+    if _gemini_active():
+        return "gemini"
+    return "easyocr" if (_READER is not None or C.OCR_ENGINE in ("auto", "easy")) else "tesseract"
 
 
 def _ping(rec, note):
@@ -187,7 +284,8 @@ def _ping(rec, note):
         return
     rec["pinged"] = True
     send(msg_ocr_fail(rec["video_url"], rec["title"], rec["thumb"], rec["tried"], note,
-                      len(rec["recipes_used"]), rec["tries"], rec.get("channel_avatar", "")))
+                      len(rec["recipes_used"]) or (1 if rec.get("gemini_done") else 0),
+                      rec["tries"], rec.get("channel_avatar", "")))
 
 
 def _try_code(code, users, state):
@@ -243,8 +341,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
     mem = load_mem()
     budget_end = time.monotonic() + C.OCR_LOOP_BUDGET
     changed = False
-    deep_used = 0                      # quota = so video PASS gate duoc OCR sau
-    for v in bare_videos:              # duet TOAN bo, khong cat truoc
+    deep_used = 0
+    eng = _engine_label()
+    for v in bare_videos:
         rec = mem.setdefault(v["video_id"], _new_rec(v))
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done"):
@@ -252,23 +351,22 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         if time.monotonic() >= budget_end:
             log_yt("OCR het budget vong nay -> so video con lai cho vong sau")
             break
-        # ===== GATE truoc, QUOTA sau: live/trailer (khong chu CODE) bi chan IM LANG,
-        # ===== khong tinh vao deep_used -> khong an slot video ma-trong-anh. =====
         if not _gate(rec):
             rec["done"] = "no_keyword"
-            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua, khong ping (khong tinh quota)")
+            log_yt(f"OCR gate[{eng}]: anh khong co chu CODE/CO DE ({rec['video_id']}) "
+                   f"-> bo qua, khong ping (khong tinh quota)")
             changed = True
             continue
         if deep_used >= C.OCR_MAX_IMAGES:
-            break                      # du slot video CO CODE -> dung, phan sau vong sau
+            break
         deep_used += 1
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand = _ensure_candidate(rec)
             if cand is None:
                 rec["done"] = "exhausted"
-                log_warn(f"OCR co chu CODE nhung khong doc duoc ma ({rec['video_id']}) sau "
-                         f"{len(rec['recipes_used'])} recipe -> PING nhap tay")
-                _ping(rec, "Ảnh CÓ chữ CODE nhưng OCR không đọc được mã sau mọi biến thể.")
+                log_warn(f"OCR[{eng}] co chu CODE nhung khong doc duoc ma ({rec['video_id']}) "
+                         f"-> PING nhap tay")
+                _ping(rec, f"Ảnh CÓ chữ CODE nhưng engine {eng} không đọc được mã chắc chắn.")
                 changed = True
                 break
             if cand in known:
@@ -278,10 +376,10 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 changed = True
                 break
             rec["tries"] += 1
-            note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · recipe "
-                    f"#{rec['recipes_used'][-1] if rec['recipes_used'] else 0} · "
-                    f"engine={OCR_ENGINE} · đã loại: {rec['tried'] or 'chưa có'}")
-            log_yt(f"OCR thu #{rec['tries']}: `{cand}` (video {rec['video_id']}) [quota {deep_used}/{C.OCR_MAX_IMAGES}]")
+            note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · engine={eng} · "
+                    f"đã loại: {rec['tried'] or 'chưa có'}")
+            log_yt(f"OCR[{eng}] thu #{rec['tries']}: `{cand}` (video {rec['video_id']}) "
+                   f"[quota {deep_used}/{C.OCR_MAX_IMAGES}]")
             _alert(rec, cand, note, True)
             changed = True
             remaining, ne, stuck, ok = _try_code(cand, users, state)
@@ -303,10 +401,10 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         else:
             if rec["tries"] >= C.OCR_MAX_TRIES and not rec.get("done"):
                 rec["done"] = "exhausted"
-                log_warn(f"OCR dat gioi han {C.OCR_MAX_TRIES} luot cho {rec['video_id']} "
-                         f"ma van bi tu choi -> PING nhap tay")
-                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt mà mọi mã đọc được đều bị "
-                           f"server từ chối.")
+                log_warn(f"OCR[{eng}] dat gioi han {C.OCR_MAX_TRIES} luot cho "
+                         f"{rec['video_id']} ma van bi tu choi -> PING nhap tay")
+                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt (engine {eng}) mà mọi mã "
+                           f"đọc được đều bị server từ chối.")
                 changed = True
     if changed:
         commit_mem(mem)
@@ -319,6 +417,7 @@ def alert_only(bare_videos, known_codes=None):
     mem = load_mem()
     changed = False
     deep_used = 0
+    eng = _engine_label()
     for v in bare_videos:
         rec = mem.setdefault(v["video_id"], _new_rec(v))
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
@@ -331,14 +430,14 @@ def alert_only(bare_videos, known_codes=None):
         if deep_used >= C.OCR_MAX_IMAGES:
             break
         deep_used += 1
-        cand = _pick(rec)
+        cand = _ensure_candidate(rec)
         if cand and cand in known:
             rec["done"] = "dup_with_text"
             log_yt(f"OCR(alert) skip dup: `{cand}` da co tu tang text -> bo qua {rec['video_id']}")
             changed = True
             continue
         _alert(rec, cand or "(chưa đọc được mã)",
-               "Chế độ OCR = alert: bot CHỈ báo, không tự nhập. Xem thumbnail để xác nhận.",
+               f"Chế độ OCR = alert (engine {eng}): bot CHỈ báo, không tự nhập.",
                False)
         rec["done"] = "alerted"
         changed = True
