@@ -1,12 +1,13 @@
 # NGUON MA CHO VN = API (Data API v3 + InnerTube public fallback).
 # TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
 #   KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
-# SUA "Dang phat???" (title sai): _looks_title LOAI overlay badge (C.BANNED_TITLE_OVERLAYS),
-#   _best_title GOM moi candidate title roi chon cai DAI NHAT (title that > badge 'Dang phat').
-#   KHONG doan cau truc card. Title that duoc ocr._resolve_title goi oEmbed (schema co dinh)
-#   khi traversal cho ra banned/short -> day la bang chung de oEmbed dang tin hon InnerTube.
-# SUA "giu pending hieu nhieu" (bac 2): sort bare theo C.BARE_ORDER (mac dinh newest-first
-#   = dao nguoc) de video giftcode-moi lot vao 3 slot OCR thay vi bi trailer/live-cu chim het.
+# SUA TITLE ("Dang phat???" / "Them vao danh sach cho???" / "(26 giay)"):
+#   _looks_title bo sung overlay badge (C.BANNED_TITLE_OVERLAYS); _strip_duration cat
+#   "(26 giay)"/"(1:23)" TRUOC khi so do dai; _best_title gom moi candidate roi chon cai
+#   DAI NHAT sau khi cat. KHONG doan cau truc card. Co dinh KHONG cat "gio/hour" de tranh
+#   an mat title su kien theo gio ("Cap nhat 8 gio").
+# SUA "giu pending hieu nhieu": sort bare theo C.BARE_ORDER (mac dinh newest-first = dao
+#   nguoc) de video giftcode-moi lot vao 3 slot OCR thay vi bi trailer/live-cu chim het.
 # Live KHONG can loc bang field (lan truoc skipped_live=0 vi doan liveStreamingDetails):
 #   OCR gate tu chan live im lang (anh live khong co chu CODE), va quota ap SAU gate (ocr.py).
 import os, re, json, requests
@@ -21,6 +22,15 @@ _dumped_once = False
 _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _IMG_HOSTS = ("ytimg.com", "googleusercontent.com")
 _AV_TOKEN = re.compile(r"=s\d+-c\b")
+
+# Duration badge cua InnerTube (hl=vi) thuong dinv vao title traversal: "... 20/10 (26 giay)".
+# Chi strip giay/phut + dang "(MM:SS)"/"(H:MM:SS)" CO NGOAC (ngoac = hieu hieu badge, khong
+#   phai gio su kien). CO TINH bo "gio/hour" tran -> de strip nham title su kien theo gio.
+_DUR_RE = re.compile(
+    r"\s*(?:"
+    r"\(?\d+(?:[:.]\d{1,2})?\s*(?:giây|giay|phút|phut|second|seconds|sec|minute|minutes|min)s?\)?"
+    r"|\(\d{1,2}:\d{2}(?::\d{2})?\)"
+    r")\s*$", re.I)
 
 
 def _host(u):
@@ -97,9 +107,13 @@ def _video_id_of(d):
     return ""
 
 
+def _strip_duration(s):
+    return _DUR_RE.sub("", s or "").strip()
+
+
 def _looks_title(s):
-    """Title hop le? Loai overlay badge ('Dang phat'...) = SUA 'Dang phat???'.
-       Khong doan cau truc card; chi so chuoi vs C.BANNED_TITLE_OVERLAYS."""
+    """Title hop le? Loai overlay badge ('Dang phat'...). Khong doan cau truc card; chi
+       so chuoi vs C.BANNED_TITLE_OVERLAYS."""
     if not s or len(s) < 8:
         return False
     if s.lower().startswith("http") or s.replace(".", "").isdigit():
@@ -110,15 +124,15 @@ def _looks_title(s):
 
 
 def _best_title(cands):
-    """Chon title tot nhat tu cac chuoi da qua _looks_title: dai nhat = nhieu kha nang la
-       title that hon badge ('Dang phat' bi loc boi _looks_title nen khong vao day).
-       Loc tiep: loai chuoi qua ngan (<12) va chuoi chi chua ky tu dac biet/space."""
+    """Chon title tot nhat: CAT duration suffix TRUOC khi do do dai (neu khong, '(26 giay)'
+       dem vao va co the bien badge thanh 'title dai nhat'). Loc chuoi <12 va khong alnum."""
     if not cands:
         return ""
-    good = [s for s in cands if len(s.strip()) >= 12 and any(ch.isalnum() for ch in s)]
+    cleaned = [_strip_duration(s) for s in cands]
+    good = [s for s in cleaned if len(s) >= 12 and any(ch.isalnum() for ch in s)]
     if not good:
         return ""
-    return max(good, key=len).strip()
+    return max(good, key=len)
 
 
 def _walk_cards(node, st):
@@ -130,14 +144,14 @@ def _walk_cards(node, st):
             st["n"] += 1
             thumb = _pick_thumb(node)
             tcode = None
-            titles = []                      # <-- GOM moi candidate thay vi dung dau tien
+            titles = []                      # GOM moi candidate thay vi dung dau tien
             for s in _iter_strings(node):
                 if _looks_title(s):
                     titles.append(s)
                 cs = code_sau_keyword_yt(s)
                 if cs and tcode is None:
                     tcode = cs[0]
-            disp = _best_title(titles)       # <-- chon cai dai nhat hop ly
+            disp = _best_title(titles)       # chon cai dai nhat hop ly (sau khi cat duration)
             card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
                     "video_url": f"https://www.youtube.com/watch?v={vid}",
                     "title": disp, "title_code": tcode}
@@ -228,7 +242,6 @@ def _via_innertube():
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    # Nhan log TRUNG THUC: khong con "da loc live" (khong loc nua; gate lo sau).
     log_yt(f"   InnerTube: coded={len(entries)} | bare(ung vien OCR, CHUA xet gate)={len(st['bare'])} "
            f"| avatar={'CO' if avatar else 'khong'}")
     return entries, st["bare"], avatar
@@ -270,7 +283,7 @@ def get_yt_candidates():
     # KHONG cat bare o day: quota OCR_MAX_IMAGES ap SAU gate trong ocr.py,
     # de live/trailer (gate fail, im lang) khong an slot video ma-trong-anh.
     bare = sorted(bb.values(), key=lambda c: c["idx"])
-    # ===== SUA "giu pending hieu nhieu" bac 2: sap xep lai theo BARE_ORDER =====
+    # ===== sort lai theo BARE_ORDER (sua "giu pending hieu nhieu") =====
     order = (getattr(C, "BARE_ORDER", "newest-first") or "").strip().lower()
     if order == "newest-first":
         bare = list(reversed(bare))     # dao nguoc: video moi nhat (cuoi list InnerTube) len dau
