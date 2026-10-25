@@ -1,11 +1,9 @@
-# OCR THUMBNAIL + VÒNG TỰ SỬA CO TRI NHO.
-# CONG TU KHOA (chong spam): truoc vong sau, chay 2 recipe dau roi kiem tra text OCR tho
-#   co chua neo CODE / CÔ DÉ (C.YT_KEYWORD_RE). KHONG co -> anh khong co ma ->
-#   done="no_keyword" IM LANG (khong recipe them, KHONG ping, nho vao ocr_memory.json).
-#   CO chu CODE ma khong doc duoc ma -> moi vao vong tu sua (OCR_MAX_TRIES=50, cat boi
-#   OCR_LOOP_BUDGET=180s/vong) va ping 🆘 neu be tac (ping luc do CO LY DO).
-# tesseract TAT DINH -> "quet lai" phai = recipe khac. 2106 -> blacklist tried[] + recipe
-# moi. 2117 = ma DUNG het luot -> dung sua, chốt failure.
+# OCR THUMBNAIL + VONG TU SUA.
+# ENGINE: EasyOCR (chinh) + tesseract (fallback).
+# CONG TU KHOA: 2 recipe dau, kiem tra text co CODE/CO DE khong.
+#   Khong co -> done="no_keyword" IM LANG.
+#   Co ma ma doc sai -> vong tu sua (2106 blacklist, 2117 dung sua).
+#   Be tac -> ping OCR_PING_USER.
 import os, time, json, requests
 from collections import Counter
 from . import config as C
@@ -17,16 +15,58 @@ from .api_redeemer import redeem_via_api
 
 DMIN = int(os.getenv("DELAY_MIN", "15000"))
 DMAX = int(os.getenv("DELAY_MAX", "30000"))
+OCR_ENGINE = os.getenv("OCR_ENGINE", "auto").strip().lower()
 
 MEM = lambda: os.path.join(os.getcwd(), "ocr_memory.json")
 _BYTES = {}
 _GATE_RECIPES = 2
+_READER = None
+_READER_FAILED = False
 
 RECIPES = [
     (2, "gray"), (2, "inv"), (3, "gray"), (3, "inv"),
     (2, "bin"), (3, "bin"), (4, "gray"), (4, "inv"),
     (2, "sharp"), (3, "sharp"), (4, "bin"), (5, "gray"),
 ]
+
+
+def _easy_reader():
+    global _READER, _READER_FAILED
+    if _READER is not None:
+        return _READER
+    if _READER_FAILED or OCR_ENGINE == "tess":
+        return None
+    try:
+        import easyocr
+        _READER = easyocr.Reader(["en"], gpu=False, verbose=False)
+        log_yt("EasyOCR san sang")
+    except Exception as e:
+        _READER_FAILED = True
+        log_warn("EasyOCR khong kha dung -> fallback tesseract:", e.__class__.__name__)
+        _READER = None
+    return _READER
+
+
+def _ocr_texts(img):
+    r = _easy_reader()
+    if r is not None:
+        try:
+            import numpy as np
+            arr = np.array(img.convert("RGB"))
+            parts = r.readtext(arr, detail=0, paragraph=False) or []
+            return [" ".join(str(p) for p in parts)]
+        except Exception as e:
+            log_warn("EasyOCR loi -> tesseract:", e.__class__.__name__)
+    out = []
+    for psm in (6, 11):
+        try:
+            import pytesseract
+            t = pytesseract.image_to_string(img, config=f"--psm {psm} -l eng") or ""
+        except Exception:
+            t = ""
+        if t.strip():
+            out.append(t)
+    return out
 
 
 def load_mem():
@@ -36,7 +76,7 @@ def load_mem():
     try:
         return json.load(open(fp, encoding="utf-8"))
     except Exception as e:
-        log_warn("ocr_memory hong -> bat dau lai:", e)
+        log_warn("ocr_memory hong:", e)
         return {}
 
 
@@ -98,12 +138,7 @@ def _run_recipe(rec, idx):
     up, kind = RECIPES[idx]
     img = _apply_recipe(pil, up, kind)
     cnt = Counter()
-    for psm in (6, 11):
-        try:
-            import pytesseract
-            txt = pytesseract.image_to_string(img, config=f"--psm {psm} -l eng") or ""
-        except Exception:
-            txt = ""
+    for txt in _ocr_texts(img):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:600]
         for c in code_from_ocr_text(txt):
@@ -184,11 +219,11 @@ def _try_code(code, users, state):
 
 def _alert(rec, code, note, redeem_flag):
     if rec["alerts"] >= C.OCR_ALERT_CAP:
-        log_hook(f"OCR alert vuot cap ({C.OCR_ALERT_CAP}) cho {rec['video_id']} -> chi log")
+        log_hook(f"OCR alert vuot cap ({C.OCR_ALERT_CAP}) cho {rec['video_id']}")
         return
     rec["alerts"] += 1
     send(msg_yt_alert({
-        "code": code, "title": rec["title"] or "Video mới (mã nằm trong ảnh thumbnail)",
+        "code": code, "title": rec["title"] or "Video mới (mã trong ảnh thumbnail)",
         "video_url": rec["video_url"], "thumb_url": rec["thumb"],
         "channel_avatar": rec.get("channel_avatar", ""),
         "via": "OCR", "redeem": redeem_flag,
@@ -210,22 +245,21 @@ def run_correction(users, state, bare_videos, now):
             continue
         if not _gate(rec):
             rec["done"] = "no_keyword"
-            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua, khong ping")
+            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua")
             changed = True
             continue
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand = _ensure_candidate(rec)
             if cand is None:
                 rec["done"] = "exhausted"
-                log_warn(f"OCR co chu CODE nhung khong doc duoc ma ({rec['video_id']}) sau "
-                         f"{len(rec['recipes_used'])} recipe -> PING nhap tay")
-                _ping(rec, "Ảnh CÓ chữ CODE nhưng OCR không đọc được mã sau mọi biến thể.")
+                log_warn(f"OCR co chu CODE nhung khong doc duoc ma ({rec['video_id']}) -> PING")
+                _ping(rec, "Ảnh CÓ chữ CODE nhưng OCR không đọc được mã.")
                 changed = True
                 break
             rec["tries"] += 1
             note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · recipe "
                     f"#{rec['recipes_used'][-1] if rec['recipes_used'] else 0} · "
-                    f"đã loại: {rec['tried'] or 'chưa có'}")
+                    f"engine={OCR_ENGINE} · đã loại: {rec['tried'] or 'chưa có'}")
             log_yt(f"OCR thu #{rec['tries']}: `{cand}` (video {rec['video_id']})")
             _alert(rec, cand, note, True)
             changed = True
@@ -240,7 +274,7 @@ def run_correction(users, state, bare_videos, now):
                 changed = True
                 continue
             if stuck and ne == 0 and remaining == pending:
-                log_warn(f"OCR stuck o `{cand}` (captcha/ket) -> de vong sau tiep")
+                log_warn(f"OCR stuck o `{cand}` -> de vong sau tiep")
                 break
             rec["done"] = "committed"
             changed = True
@@ -248,10 +282,8 @@ def run_correction(users, state, bare_videos, now):
         else:
             if rec["tries"] >= C.OCR_MAX_TRIES and not rec.get("done"):
                 rec["done"] = "exhausted"
-                log_warn(f"OCR dat gioi han {C.OCR_MAX_TRIES} luot cho {rec['video_id']} "
-                         f"ma van bi tu choi -> PING nhap tay")
-                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt mà mọi mã đọc được đều bị "
-                           f"server từ chối.")
+                log_warn(f"OCR dat gioi han {C.OCR_MAX_TRIES} luot cho {rec['video_id']} -> PING")
+                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt mà mọi mã đều bị từ chối.")
                 changed = True
     if changed:
         commit_mem(mem)
@@ -273,7 +305,7 @@ def alert_only(bare_videos):
             continue
         cand = _pick(rec)
         _alert(rec, cand or "(chưa đọc được mã)",
-               "Chế độ OCR = alert: bot CHỈ báo, không tự nhập. Xem thumbnail để xác nhận.",
+               "OCR = alert: bot CHỈ báo, không tự nhập.",
                False)
         rec["done"] = "alerted"
         changed = True
