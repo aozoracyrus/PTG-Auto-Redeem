@@ -42,16 +42,19 @@ jobs:
       GEMINI_MODEL_CHAIN: "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite"
       GEMINI_MODEL:     ${{ secrets.GEMINI_MODEL }}     # optional override (prepend)
       GEMINI_TIMEOUT:   "45"
-      # NGHIA MOI: GEMINI_MAX_CALLS = tran goi Gemini MỖI VÒNG LẶP (reset dau moi vong),
-      # KHONG con la per-process. Het tran -> video chua xet GIU PENDING cho vong sau,
-      # KHONG dead_key ca run. dead_key chi do 402/403/429.
+      # GEMINI_MAX_CALLS = tran goi Gemini MỖI VÒNG LẶP (reset dau moi vong), KHONG con
+      # per-process. Het tran -> video chua xet GIU PENDING cho vong sau, KHONG dead_key ca
+      # run. dead_key chi do 402/403/429. KHONG CON GEMINI_SOFT_CAP_OK (da xoa het soft-cap).
       GEMINI_MAX_CALLS: "8"
       GEMINI_BUSY_BACKOFF_SEC: "300"    # "cho 5p" khi ca 3 model dong
       GEMINI_THROTTLE_SEC: "2.5"        # ngu sau moi 200 OK (chong hammer)
-      OCR_MAX_IMAGES:   "8"             # TAM test; ve 3 sau khi thay Gemini doc DUNG ma trong anh
+      OCR_MAX_IMAGES:   "3"             # PRODUCTION: toi da 3 video PASS-GATE OCR sau/vong
       OCR_MAX_TRIES:    "50"
       OCR_LOOP_BUDGET:  "180"
       OCR_ALERT_CAP:    "6"
+      YT_VIDEO_SCAN:    "3"             # PRODUCTION: toi da 3 video title co ma text
+      BARE_ORDER:       "newest-first"  # video giftcode-moi len dau, tranh bi trailer-cu chim
+      OCR_USE_OEMBED:   "1"             # de 0 = tat oEmbed (chi title InnerTube + link thuan)
       WORKFLOW_FILE:    "redeem.yml"
       DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
       GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
