@@ -1,14 +1,13 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
-# ENGINE: EasyOCR (chinh) + tesseract (fallback khi EasyOCR/torch thieu).
-# CONG TU KHOA (chong spam): 2 recipe dau, kiem tra text tho co neo CODE/CO DE khong;
-#   KHONG co -> done="no_keyword" IM LANG (khong recipe them, khong ping).
-#   CO chu CODE ma khong doc duoc ma -> vong tu sua (2106 -> blacklist tried[] + recipe
-#   moi; 2117 = ma DUNG het luot -> dung sua, chot failure). Be tac -> ping OCR_PING_USER.
-# DEDUPE CROSS-TANG (lenh ban: "OCR va tieu de trung ma -> chi lay cai dau tien"):
-#   tang text (title/desc) LUON chay truoc OCR trong pipeline => "cai dau tien" = tang
-#   text thang. Neu candidate OCR trung ma da co trong queue (tang text dang lo) HOAC
-#   da nhap xong (state) -> BO QUA: khong alert, khong thu, danh dau done="dup_with_text".
-#   Ngan OCR nhap lai ma cua video khac (bo qua cooldown dong bo) va ngan alert trung.
+# ENGINE: EasyOCR (chinh) + tesseract (fallback).
+# QUY THUAT QUOTA (sua loi "live chiem slot"): duet TOAN bo bare (khong cat truoc), chay
+#   gate (2 recipe) cho tung video CHUA done. Gate FAIL (anh khong co chu CODE: live,
+#   trailer, ...) -> done="no_keyword" IM LANG, KHONG tinh vao quota. Gate PASS (anh CO
+#   chu CODE) -> MOI tinh quota va vao vong tu sau; du OCR_MAX_IMAGES video pass-gate thi
+#   dung (phan con lai vong sau, idempotent qua ocr_memory). -> live/trailer khong bao gio
+#   day video ma-trong-anh ra ngoai, va KHONG can phan-loai live bang field (da bo _is_live_node).
+# 2106 -> blacklist tried[] + recipe moi; 2117 = ma DUNG het luot -> dung sua, chot failure.
+# Be tac (het recipe / du luot ma van sai) -> ping OCR_PING_USER (1 lan/video).
 import os, time, json, requests
 from collections import Counter
 from . import config as C
@@ -244,16 +243,25 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
     mem = load_mem()
     budget_end = time.monotonic() + C.OCR_LOOP_BUDGET
     changed = False
-    for v in bare_videos[: C.OCR_MAX_IMAGES]:
+    deep_used = 0                      # quota = so video PASS gate duoc OCR sau
+    for v in bare_videos:              # duet TOAN bo, khong cat truoc
         rec = mem.setdefault(v["video_id"], _new_rec(v))
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done"):
             continue
+        if time.monotonic() >= budget_end:
+            log_yt("OCR het budget vong nay -> so video con lai cho vong sau")
+            break
+        # ===== GATE truoc, QUOTA sau: live/trailer (khong chu CODE) bi chan IM LANG,
+        # ===== khong tinh vao deep_used -> khong an slot video ma-trong-anh. =====
         if not _gate(rec):
             rec["done"] = "no_keyword"
-            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua, khong ping")
+            log_yt(f"OCR gate: anh khong co chu CODE/CO DE ({rec['video_id']}) -> bo qua, khong ping (khong tinh quota)")
             changed = True
             continue
+        if deep_used >= C.OCR_MAX_IMAGES:
+            break                      # du slot video CO CODE -> dung, phan sau vong sau
+        deep_used += 1
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand = _ensure_candidate(rec)
             if cand is None:
@@ -263,7 +271,6 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 _ping(rec, "Ảnh CÓ chữ CODE nhưng OCR không đọc được mã sau mọi biến thể.")
                 changed = True
                 break
-            # ===== DEDUPE CROSS-TANG: ma trung tang text -> tang text lo, OCR bo qua. =====
             if cand in known:
                 rec["done"] = "dup_with_text"
                 log_yt(f"OCR skip dup: `{cand}` da co tu tieu de/mo ta (tang text lo) "
@@ -274,7 +281,7 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
             note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · recipe "
                     f"#{rec['recipes_used'][-1] if rec['recipes_used'] else 0} · "
                     f"engine={OCR_ENGINE} · đã loại: {rec['tried'] or 'chưa có'}")
-            log_yt(f"OCR thu #{rec['tries']}: `{cand}` (video {rec['video_id']})")
+            log_yt(f"OCR thu #{rec['tries']}: `{cand}` (video {rec['video_id']}) [quota {deep_used}/{C.OCR_MAX_IMAGES}]")
             _alert(rec, cand, note, True)
             changed = True
             remaining, ne, stuck, ok = _try_code(cand, users, state)
@@ -311,7 +318,8 @@ def alert_only(bare_videos, known_codes=None):
     known = known_codes or set()
     mem = load_mem()
     changed = False
-    for v in bare_videos[: C.OCR_MAX_IMAGES]:
+    deep_used = 0
+    for v in bare_videos:
         rec = mem.setdefault(v["video_id"], _new_rec(v))
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done") or rec.get("alerts"):
@@ -320,6 +328,9 @@ def alert_only(bare_videos, known_codes=None):
             rec["done"] = "no_keyword"
             changed = True
             continue
+        if deep_used >= C.OCR_MAX_IMAGES:
+            break
+        deep_used += 1
         cand = _pick(rec)
         if cand and cand in known:
             rec["done"] = "dup_with_text"
