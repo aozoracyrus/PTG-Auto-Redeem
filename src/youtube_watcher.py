@@ -2,8 +2,11 @@
 # TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
 #   KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
 # SUA "Dang phat???" (title sai): _looks_title LOAI overlay badge (C.BANNED_TITLE_OVERLAYS),
+#   _best_title GOM moi candidate title roi chon cai DAI NHAT (title that > badge 'Dang phat').
 #   KHONG doan cau truc card. Title that duoc ocr._resolve_title goi oEmbed (schema co dinh)
 #   khi traversal cho ra banned/short -> day la bang chung de oEmbed dang tin hon InnerTube.
+# SUA "giu pending hieu nhieu" (bac 2): sort bare theo C.BARE_ORDER (mac dinh newest-first
+#   = dao nguoc) de video giftcode-moi lot vao 3 slot OCR thay vi bi trailer/live-cu chim het.
 # Live KHONG can loc bang field (lan truoc skipped_live=0 vi doan liveStreamingDetails):
 #   OCR gate tu chan live im lang (anh live khong co chu CODE), va quota ap SAU gate (ocr.py).
 import os, re, json, requests
@@ -106,6 +109,18 @@ def _looks_title(s):
     return " " in s
 
 
+def _best_title(cands):
+    """Chon title tot nhat tu cac chuoi da qua _looks_title: dai nhat = nhieu kha nang la
+       title that hon badge ('Dang phat' bi loc boi _looks_title nen khong vao day).
+       Loc tiep: loai chuoi qua ngan (<12) va chuoi chi chua ky tu dac biet/space."""
+    if not cands:
+        return ""
+    good = [s for s in cands if len(s.strip()) >= 12 and any(ch.isalnum() for ch in s)]
+    if not good:
+        return ""
+    return max(good, key=len).strip()
+
+
 def _walk_cards(node, st):
     if isinstance(node, dict):
         vid = _video_id_of(node)
@@ -115,15 +130,14 @@ def _walk_cards(node, st):
             st["n"] += 1
             thumb = _pick_thumb(node)
             tcode = None
-            disp = ""
+            titles = []                      # <-- GOM moi candidate thay vi dung dau tien
             for s in _iter_strings(node):
-                if not disp and _looks_title(s):
-                    disp = s
+                if _looks_title(s):
+                    titles.append(s)
                 cs = code_sau_keyword_yt(s)
-                if cs:
+                if cs and tcode is None:
                     tcode = cs[0]
-                    disp = s
-                    break
+            disp = _best_title(titles)       # <-- chon cai dai nhat hop ly
             card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
                     "video_url": f"https://www.youtube.com/watch?v={vid}",
                     "title": disp, "title_code": tcode}
@@ -246,7 +260,7 @@ def get_yt_candidates():
             continue
         seen.add(e["code"])
         final.append(e)
-    final = final[: C.YT_VIDEO_SCAN]
+    final = final[: C.YT_VIDEO_SCAN]          # = 3 (production)
     bb = {}
     for lst in pools_b:
         for c in lst:
@@ -256,6 +270,14 @@ def get_yt_candidates():
     # KHONG cat bare o day: quota OCR_MAX_IMAGES ap SAU gate trong ocr.py,
     # de live/trailer (gate fail, im lang) khong an slot video ma-trong-anh.
     bare = sorted(bb.values(), key=lambda c: c["idx"])
+    # ===== SUA "giu pending hieu nhieu" bac 2: sap xep lai theo BARE_ORDER =====
+    order = (getattr(C, "BARE_ORDER", "newest-first") or "").strip().lower()
+    if order == "newest-first":
+        bare = list(reversed(bare))     # dao nguoc: video moi nhat (cuoi list InnerTube) len dau
+    elif order == "random":
+        import random
+        random.shuffle(bare)            # phan bo deu, tranh starvation phan cuoi
+    # "oldest-first" / khac: giu nguyen thu tu idx tang dan
     avatar = (getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip() or avb or ava
     for e in final:
         e["channel_avatar"] = avatar
@@ -269,12 +291,12 @@ def get_yt_candidates():
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} UNG VIEN OCR (se duoc gate chan neu khong co chu CODE; "
-               f"chi video PASS gate moi tinh vao quota {C.OCR_MAX_IMAGES}):")
+        log_yt(f"{len(bare)} UNG VIEN OCR (BARE_ORDER={order}; se duoc gate chan neu khong co "
+               f"chu CODE; chi video PASS gate moi tinh vao quota {C.OCR_MAX_IMAGES}):")
         for i, c in enumerate(bare[:12], 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
         if len(bare) > 12:
             log_yt(f"   ... con {len(bare)-12} nua (khong dump)")
     else:
-        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR choi gate)")
+        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR choi gate, BARE_ORDER={order})")
     return final, bare
