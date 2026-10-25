@@ -1,4 +1,3 @@
-# 1 Camoufox + 1 context + 1 scan-page XUYÊN SUỐT (chi mo khi USE_API=0).
 import os
 from camoufox.sync_api import Camoufox
 from . import config as C
@@ -22,15 +21,14 @@ class BrowserSession:
             kw["storage_state"] = C.STORAGE_STATE
         self.context = self.browser.new_context(**kw)
         self.scan_page = self.context.new_page()
-        log_brw(f"Da mo browser (locale={loc}, tz={tz}, mobile-viewport=yes, "
-                f"login={'yes' if C.STORAGE_STATE else 'no'})")
+        log_brw(f"Da mo browser (locale={loc}, tz={tz})")
 
     def close(self):
         try:
             if self._cm:
                 self._cm.__exit__(None, None, None)
         except Exception as e:
-            log_err("Loi khi dong browser:", e)
+            log_err("Loi dong browser:", e)
         finally:
             self._cm = self.browser = self.context = self.scan_page = None
 
@@ -38,7 +36,7 @@ class BrowserSession:
         self.scan_page.reload(wait_until="domcontentloaded", timeout=45000)
 
     def restart(self):
-        log_brw("RESTART browser (xoa trinh duyet vao lai)")
+        log_brw("RESTART browser")
         self.close()
         self.open()
 
