@@ -55,6 +55,9 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
 YT_VIDEO_SCAN = 15          # TAM test OCR; ve 3 sau khi thay Gemini doc DUNG ma trong anh
+# THEM (sua loi A): ocr.py _alert doc C.YT_COOLDOWN; truoc day chi ton tai trong main.py
+#   -> AttributeError -> crash giua _alert -> candidate doc duong bi bo, khong nhap.
+YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
@@ -74,36 +77,34 @@ CODE_PREFIXES = ["PT"]
 CODE_MIN_LEN  = 6
 
 # ================= OCR: CHUOI GEMINI (uu tien, quay khi 5xx) > EASYOCR > TESSERACT =================
-# CHUOI MODEL LA UU TIEN, KHONG PHAI slug that. ocr.py GET /v1beta/models cua CHINH KEY
-#   va chi giu ten NAM TRONG list -> ten nao khong co bi BO + IN RA LOG (khong doan mu,
-#   khong 404 lap). Doi thu tu/them ten = sua env GEMINI_MODEL_CHAIN, khong sua code.
-#   GEMINI_MODEL (neu dat) duoc PREPEND de ban ghi de tam thoi.
-# NHIEP 5xx (model dong): KHONG idel. Xu ly = "local tham do": local van doc, nhung chi
-#   duoc ket luan DUONG TINH (thay chu CODE/ra ma -> dung); AM TINH -> giu video PENDING
-#   cho den khi Gemini het dong (GEMINI_BUSY_BACKOFF_SEC), KHONG no_keyword, KHONG ping oan.
-#   Het 5p -> Gemini quay lai quyet dinh cac video pending. (Day la nghia "cho 5p, trong
-#   luc do dung EasyOCR" cua ban, doi thanh kien truc khong mat ma va khong ping rac.)
-# CHET CAU HINH (402/403/429/tran-$) -> local AUTHORTATIVE: local quyet ca am+duong, bo
-#   tay -> ping nhap tay (vi khong con Gemini nao quay lai). 404 -> bo model do, quay tiep
-#   chuoi (slug gia, khong phai loi key).
-# TRAN: GEMINI_MAX_CALLS dem cho CA CHUOI (moi lan thu model = 1 lan) -> khong the runaway.
+# GEMINI_MODEL_CHAIN = uu tien, KHONG phai slug that. ocr.py GET /v1beta/models cua CHINH KEY
+#   va chi giu ten NAM TRONG list -> ten khong co bi BO + log (khong doan mu, khong 404 lap).
+#   GEMINI_MODEL (neu dat) duoc PREPEND de ghi de tam. Doi thu tu/them ten = sua env, khong code.
+# TRAN GOI (sua loi B): GEMINI_MAX_CALLS = tran MỖI VÒNG LẶP (reset dau moi vong, khong phai
+#   per-process). TRUOC DAY no tich luy qua ~345 vong -> 26 video gate/vong dot het 12 trong
+#   1.5 vong -> dead_key ca run -> EasyOCR lanh -> doc sai pill cach dieu. NAY: het tran =
+#   PENDING MEM (video chua xet giu cho vong sau), KHONG dead_key. dead_key chi do 402/403/429.
+#   -> Gemini khong bao gio bi "giet ca run" vi tran; no chi nghi giua cac vong.
+# NHIEP 5xx: CA chuoi 5xx -> "local tham do" (chi duong tinh, am tinh = pending) + cho
+#   GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai. KHONG idel, KHONG mat ma, KHONG ping oan.
 # OCR_ENGINE: auto = chuoi gemini (neu key co + co it nhat 1 ten trong list) > easy > tess.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "").strip()
-# Override don (prepend len chuoi). De trong -> dung chuoi mac dinh duoi.
 GEMINI_MODEL    = (os.getenv("GEMINI_MODEL") or "").strip()
-# Chuoi uu tien (csv). Ten nao KHONG ton tai voi key se bi bo + log.
 GEMINI_MODEL_CHAIN = [s.strip() for s in
                       (os.getenv("GEMINI_MODEL_CHAIN")
                        or "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite").split(",")
                       if s.strip()]
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
-GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "12"))          # tran cho CA CHUOI/run
-GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))  # "cho 5p"
-GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))  # ngu sau moi 200 OK
-OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "8"))               # TAM test; ve 3 sau khi OK
+# NGHIA MOI: tran goi Gemini MỖI VÒNG LẶP (reset boi ocr.reset_gemini_budget() tu main.py).
+# Mac dinh 8: du cho 8 video MOI/vong (video moi that su hiem; 26 chi xay ra o vong dau sau
+# khi xoaa memory, va phan vuot tran se pending -> vong sau reset -> xet tiep, khong mat).
+GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))
+GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))
+GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))
+OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "8"))       # TAM test; ve 3 sau khi OK
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
 OCR_ALERT_CAP   = int(os.getenv("OCR_ALERT_CAP", "6"))
