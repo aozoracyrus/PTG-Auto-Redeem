@@ -32,13 +32,20 @@ jobs:
       # 5xx tren 1 model -> TU DONG thu model ke tiep trong chuoi; CA chuoi 5xx -> EasyOCR che do
       # THAM DO (chi duong tinh) + giu pending GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai.
       OCR_ENGINE:       "auto"
+      # LOCAL_WHEN (sua loi C "local spam anh + lan chiem Gemini dang song"):
+      #   fallback-only (MAC DINH) = local CHI chay khi Gemini THAT SU khong dung duoc.
+      #   probe = giu hanh vi cu (local tham do ca khi net). Bat khi MUON local an nhanh.
+      LOCAL_WHEN:       "fallback-only"
       GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
       # Chuoi uu tien (csv). Ten khong ton tai voi key -> bi BO + in log (khong doan mu).
       # Doi thu tu/them ten o DAY, khong can sua code. GEMINI_MODEL (secret) neu dat se prepend.
       GEMINI_MODEL_CHAIN: "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite"
       GEMINI_MODEL:     ${{ secrets.GEMINI_MODEL }}     # optional override (prepend)
       GEMINI_TIMEOUT:   "45"
-      GEMINI_MAX_CALLS: "12"            # tran cho CA CHUOI/run = luoi an toan $
+      # NGHIA MOI: GEMINI_MAX_CALLS = tran goi Gemini MỖI VÒNG LẶP (reset dau moi vong),
+      # KHONG con la per-process. Het tran -> video chua xet GIU PENDING cho vong sau,
+      # KHONG dead_key ca run. dead_key chi do 402/403/429.
+      GEMINI_MAX_CALLS: "8"
       GEMINI_BUSY_BACKOFF_SEC: "300"    # "cho 5p" khi ca 3 model dong
       GEMINI_THROTTLE_SEC: "2.5"        # ngu sau moi 200 OK (chong hammer)
       OCR_MAX_IMAGES:   "8"             # TAM test; ve 3 sau khi thay Gemini doc DUNG ma trong anh
