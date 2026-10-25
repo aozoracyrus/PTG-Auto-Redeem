@@ -1,3 +1,4 @@
+# TOAN BO CAU HINH. Comment = tieng Viet co dau; phan MAY DOC = ASCII nguyen van.
 import os, re
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
@@ -53,7 +54,10 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-YT_VIDEO_SCAN = 3
+# TAM THOI = 15 de TEST OCR (mo rong cua so video duoc xet -> video "ma chi trong anh"
+# co co hoi roi vao danh sach bare ma khong bi video live chiem het cho).
+# SAU KHI thay OCR doc DUNG ma trong anh -> RU VE 3.
+YT_VIDEO_SCAN = 15
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
@@ -67,8 +71,10 @@ YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
 # ================= NEO TRICH MA =================
-# Một regex duy nhất: C[OÔ][\s.:|_-]*D[EÉ] + "CHUNG" tuỳ chọn
-# => CODE / CODE CHUNG / CÔ DÉ / CÔ DÉ CHUNG / CO DE / CODE: ...
+# Mot regex duy nhat: C[OÔ][\s.:|_-]*D[EÉ] + "CHUNG" tuy chon
+#   => CODE / CODE CHUNG / CÔ DÉ / CÔ DÉ CHUNG / CO DE / CODE: ...
+# Dung CHUNG cho ca title, mo ta lan OCR (khong tach tap neo). Chi khac o duong
+# strict/join (xem parsers.py) va o quet sau (chi anh thumbnail cua video bare).
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
 YT_KEYWORD_RE   = re.compile(KEYWORD_PATTERN, re.I)
 CODE_PREFIXES = ["PT"]
