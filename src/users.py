@@ -1,4 +1,3 @@
-# Doc id_user.txt -> danh sach ID. Moi dong 1 ID; 'VN - ID' hoac ID tran; '#' comment.
 import os, re
 from . import config as C
 from .utils import log_warn
@@ -18,7 +17,7 @@ def load_users():
         m = _REGION_PREFIX.match(s)
         uid = (m.group(1) if m else s).strip()
         if not C.ID_RE.fullmatch(uid):
-            log_warn("Bo qua dong ID khong hop le (can dang 4-4-4):", repr(s))
+            log_warn("Bo qua ID khong hop le:", repr(s))
             continue
         out.append({"id": uid})
     return out
