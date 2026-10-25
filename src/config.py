@@ -72,13 +72,18 @@ YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
 # Overlay badge pho bien trong UI card InnerTube -> KHONG phai title that cua video.
-# _looks_title (youtube_watcher) tuoi chuoi nay; ocr._resolve_title coi no = khong co title
-# -> goi oEmbed (schema co dinh, KHONG phai doan InnerTube nhu lan skipped_live=0).
+# _looks_title (youtube_watcher) tuoi chuoi nay; _best_title gom candidates va chon cai dai
+# nhat (title that > badge). Day la cach sua "Dang phat???" KHONG doan cau truc card.
 BANNED_TITLE_OVERLAYS = {"đang phát", "phát trực tiếp", "live", "xem tiếp", "mới", "hot"}
 
 # Thu tu xu ly ung vien OCR: newest-first = dao nguoc list bare (video upload moi nhat len
 # dau) de video giftcode-moi lot vao slot OCR thay vi bi trailer/live-cu chim het.
 BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
+
+# OCR_USE_OEMBED: khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed lay title that
+#   (schema co dinh, khong doan InnerTube nhu lan skipped_live=0). De 0 = tat hoan toan,
+#   chi dung title da parse duoc; con rong thi msg_yt_alert in "[Xem video](url)" thuan tuy.
+OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 
 # ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
