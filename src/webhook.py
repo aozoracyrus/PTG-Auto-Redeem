@@ -2,14 +2,15 @@
 # HAI DIEU KIEN BAT BUOC (docs.discord.com):
 #   (1) flags = 32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
 #   (2) query ?with_components=true -> thieu thi components bi bo qua.
-# CAU TRUC MOI (sua loi 400 {"components":["0"]}): bo Section+accessory (de vap
-#   validation tren webhook execute), chuyen sang pattern ma quest-notifier cua ban dang
-#   dung va chay: Container(17) chua [ TextDisplay(10) = noi dung, MediaGallery(12) =
-#   items:[avatar, thumbnail] ]. MediaGallery la kho chuyen nhieu anh trong 1 muc ->
-#   hien DU ca avatar kenh lan thumbnail video, khong can accessory.
-# accent_color = spine trai (vieng vang/xanh/do/cam) — DA hoat dong (thay trong anh).
-# AN TOAN: 400 -> log payload+body (co bang chung debug) va tu fallback sang
-#   TextDisplay-only PHANG (van flags 32768 = V2, khong quay lai V1) de mat tin.
+# CAU TRUC TIN CO ANH (sua "thumbnail nho"):
+#   Container(17) -> [ Section(9){ TextDisplay(10)=noi dung, accessory=Thumbnail(11)=avatar },
+#                      MediaGallery(12){ items:[ thumbnail ] } ]
+#   LY DO: MediaGallery nhieu item = GRID (moi o bi ep nho); MediaGallery DUNG 1 item =
+#   render FULL-WIDTH, giu ty le, CLICK mo lightbox ZOOM TO. Avatar thi hop lam accessory
+#   (o vuong nho goc phai, dung chat icon kenh). Tam tac: avatar = accessory, thumbnail =
+#   gallery 1 item -> thumbnail phong to duoc ma avatar van yen.
+# accent_color = spine trai (vang/xanh/do/cam). AN TOAN: 400 -> log payload+body, fallback
+#   sang TextDisplay-only PHANG (van flags 32768 = V2, khong quay lai V1) de mat tin.
 import os, json, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
@@ -37,29 +38,37 @@ def _td(content):
     return {"type": 10, "content": content}
 
 
-def _gallery(urls):
-    """MediaGallery(12): moi url = 1 item. Loc rong/trung; toi da 10 item (gioi han V2)."""
-    items, seen = [], set()
-    for u in urls:
-        u = (u or "").strip()
-        if u and u.startswith("http") and u not in seen:
-            seen.add(u)
-            items.append({"media": {"url": u}})
-        if len(items) >= 10:
-            break
-    return {"type": 12, "items": items} if items else None
+def _accessory(url):
+    """Thumbnail(11) = accessory cua Section (o vuong nho goc phai)."""
+    return {"type": 11, "media": {"url": url}}
 
 
-def _container(text_lines, color, image_urls=None, mention_uid=None):
-    """Container(17) = [TextDisplay(10) gop noi dung, MediaGallery(12) anh (tuy chon)]."""
+def _gallery_one(url):
+    """MediaGallery(12) voi DUNG 1 item -> Discord render TO, click zoom. (Nhieu item =
+       grid nho -> do la nguyen nhan thumbnail bi be o ban truoc.)"""
+    url = (url or "").strip()
+    if not url or not url.startswith("http"):
+        return None
+    return {"type": 12, "items": [{"media": {"url": url}}]}
+
+
+def _container(text_lines, color, avatar_url=None, thumb_url=None, mention_uid=None):
+    """Xay Container(17). avatar -> Section.accessory; thumb -> MediaGallery 1 item (to).
+       Tra (payload, body_flat) de send() co the fallback phang khi 400."""
     body = "\n".join(x for x in text_lines if x is not None)
     sq = _SQUARE.get(color, "")
     if sq:
         body = f"{sq} {body}"
-    kids = [_td(body)]
-    g = _gallery(image_urls or [])
+    kids = []
+    av = (avatar_url or "").strip()
+    if av and av.startswith("http"):
+        # Section: chu ben trai + avatar ben phai (accessory).
+        kids.append({"type": 9, "components": [_td(body)], "accessory": _accessory(av)})
+    else:
+        kids.append(_td(body))
+    g = _gallery_one(thumb_url)
     if g:
-        kids.append(g)
+        kids.append(g)            # thumbnail video: 1 item -> phong to + zoom
     cont = {"type": 17, "accent_color": color, "components": kids}
     p = {"flags": _FLAG_V2, "components": [cont]}
     if mention_uid:
@@ -92,7 +101,6 @@ def send(payload):
                 "| Discord:", (r.text or "")[:300],
                 "| payload:", json.dumps(full, ensure_ascii=False)[:500])
         if flat is not None:
-            # Fallback VAN LA V2 (flags 32768), chi bo anh de cham hon validation.
             flat_payload = {"flags": _FLAG_V2, "components": [_td(flat)]}
             if full.get("allowed_mentions"):
                 flat_payload["allowed_mentions"] = full["allowed_mentions"]
@@ -152,7 +160,8 @@ def msg_yt_alert(entry, cooldown_s):
         if raw:
             lines.append(f"📝 Text OCR thô: `{raw[:240]}`")
     lines.append(f'— Code `{code}` phát hiện lúc {_vn_hhmm()} (giờ VN)')
-    return _container(lines, C_ALERT, image_urls=[avatar, thumb])
+    # avatar -> accessory (nho, goc phai); thumb -> MediaGallery 1 item (TO + zoom).
+    return _container(lines, C_ALERT, avatar_url=avatar, thumb_url=thumb)
 
 
 def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, avatar=""):
@@ -170,4 +179,5 @@ def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, 
     lines.append(f"👉 Mở ảnh thumbnail, đọc mã bằng mắt rồi nhập tay tại "
                  f"[trang quy đổi VNG]({C.URL_VN}).")
     lines.append(f"— Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử")
-    return _container(lines, C_FAILURE, image_urls=[av, thumb_url], mention_uid=uid or None)
+    return _container(lines, C_FAILURE, avatar_url=av, thumb_url=thumb_url,
+                      mention_uid=uid or None)
