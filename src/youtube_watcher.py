@@ -1,12 +1,11 @@
 # NGUON MA CHO VN = API (Data API v3 + InnerTube public fallback).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video KHONG co
-#   ma text nhung CO thumbnail = UNG VIEN OCR.
-# SUA LAN NAY (nhan loi): BO _is_live_node. Ham do phong doan cau truc InnerTube
-#   (liveStreamingDetails / style=="LIVE") -> skipped_live=0 = hong hoan toan, va nhan log
-#   "live da loc" tung ho mot tinh nang khong chay. Live KHONG can loc bang field: OCR gate
-#   (da chung minh chay dung) tu chan live im lang (anh live khong co chu CODE). Van de that
-#   la quota bi ap TRUOC gate -> live dung dau an het slot. Nay: bare tra VE KHONG CAT, va
-#   ocr.py ap quota SAU gate (chi video PASS gate moi tinh slot). -> khong con phong doan.
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
+#   KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
+# SUA "Dang phat???" (title sai): _looks_title LOAI overlay badge (C.BANNED_TITLE_OVERLAYS),
+#   KHONG doan cau truc card. Title that duoc ocr._resolve_title goi oEmbed (schema co dinh)
+#   khi traversal cho ra banned/short -> day la bang chung de oEmbed dang tin hon InnerTube.
+# Live KHONG can loc bang field (lan truoc skipped_live=0 vi doan liveStreamingDetails):
+#   OCR gate tu chan live im lang (anh live khong co chu CODE), va quota ap SAU gate (ocr.py).
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt, code_from_desc_text
@@ -96,8 +95,15 @@ def _video_id_of(d):
 
 
 def _looks_title(s):
-    return bool(s) and len(s) >= 8 and " " in s and not s.lower().startswith("http") \
-        and not s.replace(".", "").isdigit()
+    """Title hop le? Loai overlay badge ('Dang phat'...) = SUA 'Dang phat???'.
+       Khong doan cau truc card; chi so chuoi vs C.BANNED_TITLE_OVERLAYS."""
+    if not s or len(s) < 8:
+        return False
+    if s.lower().startswith("http") or s.replace(".", "").isdigit():
+        return False
+    if s.strip().lower() in C.BANNED_TITLE_OVERLAYS:
+        return False
+    return " " in s
 
 
 def _walk_cards(node, st):
@@ -123,7 +129,7 @@ def _walk_cards(node, st):
                     "title": disp, "title_code": tcode}
             if tcode:
                 st["coded"].append(card)
-            elif thumb:                      # KHONG loc live o day; gate lo sau
+            elif thumb:                      # KHONG loc live o day; gate lo sau (ocr.py)
                 st["bare"].append(card)
         for v in node.values():
             _walk_cards(v, st)
@@ -208,7 +214,7 @@ def _via_innertube():
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    # Nhan log TRUNG THUC: khong con "da loc live" (khong loc nua).
+    # Nhan log TRUNG THUC: khong con "da loc live" (khong loc nua; gate lo sau).
     log_yt(f"   InnerTube: coded={len(entries)} | bare(ung vien OCR, CHUA xet gate)={len(st['bare'])} "
            f"| avatar={'CO' if avatar else 'khong'}")
     return entries, st["bare"], avatar
@@ -247,8 +253,8 @@ def get_yt_candidates():
             cur = bb.get(c["video_id"])
             if cur is None or c["idx"] < cur["idx"]:
                 bb[c["video_id"]] = c
-    # KHONG cat bare o day: quota OCR_MAX_IMAGES se duoc ap SAU gate trong ocr.py,
-    # de live/trailer (gate fail, im lang) khong an slot cua video ma-trong-anh.
+    # KHONG cat bare o day: quota OCR_MAX_IMAGES ap SAU gate trong ocr.py,
+    # de live/trailer (gate fail, im lang) khong an slot video ma-trong-anh.
     bare = sorted(bb.values(), key=lambda c: c["idx"])
     avatar = (getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip() or avb or ava
     for e in final:
@@ -265,7 +271,7 @@ def get_yt_candidates():
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
         log_yt(f"{len(bare)} UNG VIEN OCR (se duoc gate chan neu khong co chu CODE; "
                f"chi video PASS gate moi tinh vao quota {C.OCR_MAX_IMAGES}):")
-        for i, c in enumerate(bare[:12], 1):   # dump 12 dau du nhin, khong spam log
+        for i, c in enumerate(bare[:12], 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
         if len(bare) > 12:
             log_yt(f"   ... con {len(bare)-12} nua (khong dump)")
