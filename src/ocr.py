@@ -8,9 +8,10 @@
 #       khong dung duoc. Va _ensure_candidate khi gemini_done=True KHONG dot RECIPES.
 #   (D) SOFT-CAP _GEMINI_OK_COUNT per-run -> sau 10 video dau, MOI video "soft_cap" ->
 #       pending VINH VIEN den het run (Gemini tu giet minh). DA XOAI HET soft-cap.
-#       Quy tac: moi bien dem rate-limit phai reset cung chu ky voi ngan sach no bao ve.
-# SUA TITLE "Dang phat???": _resolve_title goi oEmbed (schema co dinh) khi traversal cho ra
-#   banned/short. KHONG doan cau truc InnerTube (lan truoc skipped_live=0 vi doan field).
+# SUA TITLE "Dang phat???" / "Them vao danh sach cho???": _resolve_title uu tien title
+#   da parse duoc (non-empty & khong banned) -> KHONG goi oEmbed. Chi khi that su rong
+#   va OCR_USE_OEMBED=True moi goi oEmbed (schema co dinh). Van rong -> tra '' de
+#   msg_yt_alert in '[Xem video](url)' thuan tuy (khong bia nhan 'Ma <code>').
 # GC BACKLOG: _gc_expired_pending xoa video pending qua OCR_ALERT_TTL (>6h) -> giai slot
 #   cho video moi, tranh backlog pending tich luy vinh vien khi toc do nap > toc do xu ly.
 # _gate tra 3 trang thai "pass"/"fail"/"pending"; _ensure_candidate tra (cand, finalize).
@@ -473,25 +474,29 @@ def _engine_display():
 
 
 def _resolve_title(entry):
-    """Title that: neu traversal cho ra banned/short -> goi oEmbed (schema co dinh).
-       That bai -> tra ve chuoi cu hoac '' (msg_yt_alert se fallback 'Ma <code>')."""
+    """Title that, 3 buoc uu tien (KHONG phu thuoc oEmbed khi da co title):
+       (1) entry['title'] non-empty & khong banned -> dung ngay (khong goi mang).
+       (2) neu OCR_USE_OEMBED=True va (1) fail -> goi oEmbed (schema co dinh).
+       (3) van rong -> tra '' de msg_yt_alert in '[Xem video](url)' thuan tuy (khong bia nhan)."""
     t = (entry.get("title") or "").strip()
-    if t and len(t) >= 8 and t.lower() not in C.BANNED_TITLE_OVERLAYS:
-        return t
+    if t and len(t) >= 12 and t.lower() not in C.BANNED_TITLE_OVERLAYS:
+        return t                              # BUOC 1: co san -> khong can oEmbed
+    if not getattr(C, "OCR_USE_OEMBED", True):
+        return ""                             # BUOC 3: tat oEmbed -> tra rong (link thuan)
     vid = (entry.get("video_id") or "").strip()
     if not vid:
-        return t
-    try:
+        return ""
+    try:                                      # BUOC 2: chi khi that su can
         r = requests.get("https://www.youtube.com/oembed",
                          params={"url": f"https://www.youtube.com/watch?v={vid}",
-                                 "format": "json"}, timeout=10)
+                                 "format": "json"}, timeout=8)
         if r.status_code == 200:
             real = (r.json().get("title") or "").strip()
-            if real:
+            if real and len(real) >= 8:
                 return real
     except Exception as e:
-        log_warn("oEmbed loi (dung title cu):", e.__class__.__name__)
-    return t
+        log_warn("oEmbed loi (tra rong -> link thuan):", e.__class__.__name__)
+    return ""
 
 
 def _ping(rec, note):
