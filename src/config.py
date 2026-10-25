@@ -1,4 +1,4 @@
-# TOAN BO CAU HINH. Comment = tieng Viet co dau; phan MAY DOC = ASCII nguyen van.
+# TOAN BO CAU HINH. Comment = tieng Viet khong dau; chuoi hien thi cho nguoi = co dau.
 import os, re
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
@@ -54,10 +54,10 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-# RU VE PRODUCTION: 3 video moi nhat co ma text (title/desc) duoc queue+redeem.
+# PRODUCTION: 3 video moi nhat co ma text (title/desc) duoc queue+redeem.
 YT_VIDEO_SCAN = 3
-# SUA LOI A: ocr.py _alert doc C.YT_COOLDOWN; truoc day chi ton tai trong main.py ->
-#   AttributeError -> crash giua _alert -> candidate doc duong bi bo, khong nhap. Nay o day.
+# ocr.py _alert doc C.YT_COOLDOWN; truoc day chi ton tai trong main.py -> AttributeError
+#   -> crash giua _alert -> candidate doc duong bi bo, khong nhap. Nay o day.
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
@@ -71,18 +71,16 @@ YT_CHANNEL_NAME   = "Play Together VNG"
 YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
-# Overlay badge pho bien trong UI card InnerTube -> KHONG phai title that cua video.
-# _looks_title (youtube_watcher) tuoi chuoi nay; _best_title gom candidates va chon cai dai
-# nhat (title that > badge). Day la cach sua "Dang phat???" KHONG doan cau truc card.
+# Overlay badge trong UI card InnerTube -> KHONG phai title that. _looks_title bo sung
+#   chuoi nay; _best_title gom candidates va cat duration suffix truoc khi so do dai.
 BANNED_TITLE_OVERLAYS = {"đang phát", "phát trực tiếp", "live", "xem tiếp", "mới", "hot"}
 
-# Thu tu xu ly ung vien OCR: newest-first = dao nguoc list bare (video upload moi nhat len
-# dau) de video giftcode-moi lot vao slot OCR thay vi bi trailer/live-cu chim het.
+# Thu tu xu ly ung vien OCR: newest-first = dao nguoc list bare de video giftcode-moi
+#   lot vao slot OCR thay vi bi trailer/live-cu chim het (sua "giu pending hieu nhieu").
 BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
 
-# OCR_USE_OEMBED: khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed lay title that
-#   (schema co dinh, khong doan InnerTube nhu lan skipped_live=0). De 0 = tat hoan toan,
-#   chi dung title da parse duoc; con rong thi msg_yt_alert in "[Xem video](url)" thuan tuy.
+# Khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed (schema co dinh). De 0 =
+#   tat hoan toan, chi dung title da parse; van rong -> webhook in "[Xem video](url)" thuan.
 OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 
 # ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
@@ -95,26 +93,19 @@ CODE_MIN_LEN  = 6
 # GEMINI_MODEL_CHAIN = uu tien, KHONG phai slug that. ocr.py GET /v1beta/models cua CHINH KEY
 #   va chi giu ten NAM TRONG list -> ten khong co bi BO + log (khong doan mu, khong 404 lap).
 #   GEMINI_MODEL (neu dat) duoc PREPEND de ghi de tam. Doi thu tu/them ten = sua env, khong code.
-# TRAN GOI (sua loi B): GEMINI_MAX_CALLS = tran MỖI VÒNG LẶP (reset_gemini_budget() goi tu
-#   main.py dau moi vong). Truoc day no tich luy per-process -> 26 video gate/vong dot het
-#   tran trong 1.5 vong -> dead_key ca run -> EasyOCR lanh -> doc sai pill cach dieu. Nay het
-#   tran = PENDING MEM (video chua xet giu cho vong sau), KHONG dead_key. dead_key chi do 402/403/429.
-# KHONG CO SOFT-CAP (loai bo bug lan 9): luot truoc them _GEMINI_OK_COUNT per-run + soft_cap
-#   => sau 10 video dau, MOI video tra "soft_cap" -> pending VINH VIEN den het run (345'),
-#   Gemini tu giet minh du key con free/model ranh. Quy tac rut ra sau 9 lan cung mau
-#   (bien dem sai don vi thoi gian): MOI bien dem rate-limit PHAI reset cung chu ky voi
-#   ngan sach no bao ve. Budget per-loop => counter per-loop. Khong ngoai le. Voi
-#   OCR_MAX_IMAGES=3 + throttle 2.5s, tran thuc te <=3 goi/vong (~180/h) -> burst khong
-#   ton tai -> soft-cap giai quyet van de khong co, chi them cho toi sai lan 10. BO.
+# TRAN GOI: GEMINI_MAX_CALLS = tran MỖI VÒNG LẶP (reset_gemini_budget() goi tu main.py dau
+#   moi vong). Truoc day tich luy per-process -> dead_key ca run -> EasyOCR lanh -> doc sai
+#   pill. Nay het tran = PENDING MEM (video chua xet giu cho vong sau), KHONG dead_key.
+#   dead_key chi do 402/403/429. KHONG CON soft-cap (_GEMINI_OK_COUNT per-run tung lam Gemini
+#   tu giet minh sau 10 video dau -> da xoa het; quy tac: bien dem rate-limit phai reset cung
+#   chu ky voi ngan sach no bao ve).
 # NHIEP 5xx: CA chuoi 5xx -> "local tham do" (chi duong tinh, am tinh = pending) + cho
-#   GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai. KHONG idel, KHONG mat ma, KHONG ping oan.
-# LOCAL_WHEN (sua loi C "local spam anh + lan chiem Gemini dang song"):
-#   "fallback-only" (MAC DINH) = EasyOCR/Tesseract CHI chay khi Gemini THAT SU khong dung
-#     duoc (busy_all/budget/dead_key/no-model/no-key). Mot lan Gemini loi mang/safety ("net")
-#     KHONG kich hoat local -> video do pending cho vong sau retry Gemini.
-#   "probe" = giu hanh vi cu: local tham do ca khi net (am tinh van pending, nhung van dot
-#     recipe). Chi bat khi ban MUON local an nhanh video chu-thuong trong cua so busy, chap
-#     nhan some-noise.
+#   GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai. 5xx KHONG tinh tien (pricing: chi 200 moi
+#   tinh) -> chi la chong spam, khong phai chong phi.
+# LOCAL_WHEN: "fallback-only" (MAC DINH) = EasyOCR/Tesseract CHI chay khi Gemini THAT SU
+#   khong dung duoc (busy_all/budget/dead_key/no-model/no-key). Mot lan Gemini loi mang
+#   ("net") KHONG kich hoat local -> video do pending cho vong sau retry Gemini. "probe" =
+#   giu hanh vi cu (local tham do ca khi net).
 # OCR_ENGINE: auto = chuoi gemini (neu key co + co it nhat 1 ten trong list) > easy > tess.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
@@ -130,8 +121,8 @@ GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
 GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))            # tran/goi-per-LOOP
 GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))
 GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))
-# RU VE PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong.
-# Gate fail (live/trailer/khong chu CODE) KHONG tinh vao day -> 3 slot dun cho video ma-trong-anh.
+# PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong. Gate fail
+#   (live/trailer/khong chu CODE) KHONG tinh vao day -> 3 slot dun cho video ma-trong-anh.
 OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "3"))
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
