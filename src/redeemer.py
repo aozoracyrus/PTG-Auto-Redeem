@@ -1,4 +1,3 @@
-# BROWSER FALLBACK (chi khi USE_API=0). Dien ma+ID, chon server, bam nut, poll 1/1 vs 0/1.
 import time
 from . import config as C
 from .utils import log_api, log_warn, sleep, rand_ms, shot
@@ -11,11 +10,11 @@ def _fill_by_ph(page, placeholders, value, label=""):
             loc.wait_for(state="visible", timeout=4000)
             loc.click()
             loc.fill(value)
-            log_api(f"OK đã điền {label} qua placeholder '{ph}'")
+            log_api(f"OK điền {label} qua '{ph}'")
             return True
         except Exception as e:
             log_warn(f"xx placeholder '{ph}' cho {label}: {e.__class__.__name__}")
-    log_warn(f"xx KHONG tim thay placeholder nao cho {label} (da thu {len(placeholders)} cai)")
+    log_warn(f"xx KHONG tim thay placeholder cho {label}")
     return False
 
 
@@ -48,7 +47,7 @@ def _ensure_server(page):
     try:
         opener = _find_server_opener(page)
         if opener is None:
-            log_warn("server: khong tim thay o server (best-effort bo qua)")
+            log_warn("server: khong tim thay (bo qua)")
             return False
         opener.click(timeout=3000)
         sleep(0.8)
@@ -66,29 +65,29 @@ def _ensure_server(page):
                 continue
         if opt is not None:
             opt.click(timeout=2500)
-            log_api("OK server: đã chọn (best-effort)")
+            log_api("OK server: đã chọn")
             return True
         try:
             page.keyboard.press("ArrowDown")
             sleep(0.3)
             page.keyboard.press("Enter")
-            log_api("OK server: fallback phím đã gửi")
+            log_api("OK server: fallback phím")
             return True
         except Exception:
-            log_warn("xx server: khong chon duoc option")
+            log_warn("xx server: khong chon duoc")
             return False
     except Exception as e:
-        log_warn(f"xx server best-effort loi (bo qua): {e}")
+        log_warn(f"xx server: {e}")
         return False
 
 
 def _classify(body_low):
-    if _any(body_low, C.NEED_LOGIN):      return "need_login",  "chưa liên kết tài khoản (cần login/storage_state)"
+    if _any(body_low, C.NEED_LOGIN):      return "need_login",  "chưa liên kết tài khoản"
     if _any(body_low, C.TRANSIENT):       return "transient",   "lỗi hệ thống tạm thời"
-    if _any(body_low, C.FAIL_USAGE):      return "usage_limit", "hết lượt nhập / usage limit"
+    if _any(body_low, C.FAIL_USAGE):      return "usage_limit", "hết lượt nhập"
     if _any(body_low, C.FAIL_NOTEXIST):   return "not_exist",   "không tồn tại / sai mã"
-    if _any(body_low, C.FAIL_IDERROR):    return "id_error",    "ID không tìm thấy/offline — kiểm tra id_user.txt"
-    if _any(body_low, C.FAIL_VALIDATION): return "validation",  "thông tin nhập không hợp lệ"
+    if _any(body_low, C.FAIL_IDERROR):    return "id_error",    "ID không tìm thấy/offline"
+    if _any(body_low, C.FAIL_VALIDATION): return "validation",  "thông tin không hợp lệ"
     if _any(body_low, C.FAIL_SECTION):    return "other",       "thất bại"
     return "other", "thất bại"
 
@@ -96,18 +95,18 @@ def _classify(body_low):
 def _find_redeem_btn(page):
     btn = page.get_by_role("button", name=C.BTN_REDEEM).or_(page.get_by_text(C.BTN_REDEEM))
     if btn.count() > 0:
-        log_api("OK tim thay nut Redeem qua regex chinh")
+        log_api("OK nut Redeem qua regex")
         return btn.first
     for alt in C.BTN_REDEEM_ALTS:
         btn = page.get_by_role("button", name=alt).or_(page.get_by_text(alt))
         if btn.count() > 0:
-            log_api(f"OK tim thay nut qua alt regex: {alt.pattern}")
+            log_api(f"OK nut qua alt: {alt.pattern}")
             return btn.first
     for sel in ['button:has-text("code")', 'button:has-text("redeem")', 'button:has-text("nhap")']:
         try:
             loc = page.locator(sel)
             if loc.count() > 0:
-                log_api(f"OK tim thay nut qua CSS: {sel}")
+                log_api(f"OK nut qua CSS: {sel}")
                 return loc.first
         except Exception:
             continue
@@ -142,13 +141,13 @@ def _attempt(page, code, uid):
             cls = (btn.get_attribute("class") or "").lower()
             is_disabled = btn.get_attribute("disabled") is not None or "disabled" in cls
             if is_disabled:
-                log_api(f"nut dang disabled (srv_ok={srv_ok}) -> force click")
+                log_api(f"nut disabled (srv_ok={srv_ok}) -> force click")
                 btn.click(timeout=8000, force=True)
             else:
                 log_api("nut visible & enabled, clicking...")
                 btn.click(timeout=8000)
         except Exception as e:
-            log_warn(f"click timeout -> force click (err={e.__class__.__name__})")
+            log_warn(f"click timeout -> force click ({e.__class__.__name__})")
             try:
                 btn.click(timeout=8000, force=True)
             except Exception as e2:
