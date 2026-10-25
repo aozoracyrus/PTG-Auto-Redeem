@@ -1,19 +1,19 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
-# BON LOI DA SUA (xem comment config.py):
-#   (A) C.YT_COOLDOWN khong ton tai -> crash giua _alert -> candidate doc duong bi bo.
-#   (B) _GEMINI_CALLS tich luy per-process -> dead_key ca run. Nay budget per-LOOP.
-#   (C) "local spam anh + lan chiem Gemini dang song": mot lan Gemini loi mang ("net")
-#       roi local AUTHORTATIVE -> no_keyword/exhausted OAN cho pill cach dieu. Nay
-#       LOCAL_WHEN=fallback-only: "net" LUON pending; local chi chay khi Gemini THAT SU
-#       khong dung duoc. Va _ensure_candidate khi gemini_done=True KHONG dot RECIPES.
-#   (D) SOFT-CAP _GEMINI_OK_COUNT per-run -> sau 10 video dau, MOI video "soft_cap" ->
-#       pending VINH VIEN den het run (Gemini tu giet minh). DA XOAI HET soft-cap.
-# SUA TITLE "Dang phat???" / "Them vao danh sach cho???": _resolve_title uu tien title
-#   da parse duoc (non-empty & khong banned) -> KHONG goi oEmbed. Chi khi that su rong
-#   va OCR_USE_OEMBED=True moi goi oEmbed (schema co dinh). Van rong -> tra '' de
-#   msg_yt_alert in '[Xem video](url)' thuan tuy (khong bia nhan 'Ma <code>').
-# GC BACKLOG: _gc_expired_pending xoa video pending qua OCR_ALERT_TTL (>6h) -> giai slot
-#   cho video moi, tranh backlog pending tich luy vinh vien khi toc do nap > toc do xu ly.
+# TAT CA FIX HOP NHAT (xem comment config.py de biet ly do tung cai):
+#   (A) C.YT_COOLDOWN ton tai trong config.py -> _alert khong con crash -> candidate duoc nhap.
+#   (B) GEMINI_MAX_CALLS = per-LOOP (reset_gemini_budget() tu main.py) -> het tran = pending
+#       mem, KHONG dead_key ca run. dead_key chi do 402/403/429.
+#   (C) LOCAL_WHEN=fallback-only: mot lan Gemini loi mang ("net") -> LUON pending, KHONG
+#       kich hoat EasyOCR (tranh no_keyword/exhausted OAN cho pill cach dieu). Local chi
+#       chay khi Gemini THAT SU khong dung duoc. _ensure_candidate khi gemini_done=True
+#       KHONG bao gio dot RECIPES (chong "local lan chiem Gemini dang song").
+#   (D) DA XOAI soft-cap _GEMINI_OK_COUNT per-run (tung lam Gemini tu giet minh sau 10 video).
+#   (E) TITLE: _resolve_title 3 buoc (title co san -> oEmbed neu OCR_USE_OEMBED -> '');
+#       _gemini_call ghi rec['gemini_model'] khi 200 -> _engine_label(rec) in slug THAT,
+#       _engine_display(rec) in ten dep ("Gemini 3.5 Flash Lite"). Title rong -> webhook
+#       in "[Xem video](url)" thuan, khong bia nhan "Ma <code>" (nguyen nhan "Them vao
+#       danh sach cho???").
+#   (F) GC: _gc_expired_pending xoa video pending qua OCR_ALERT_TTL -> giai slot.
 # _gate tra 3 trang thai "pass"/"fail"/"pending"; _ensure_candidate tra (cand, finalize).
 # 2106 -> blacklist tried[] + candidate ke tiep; 2117 = ma DUNG het luot -> dung sua.
 import os, io, time, json, base64, requests
@@ -70,8 +70,6 @@ _GEMINI_PROMPT = (
 
 # ================= Reset budget per-loop (goi tu main.py dau moi vong) =================
 def reset_gemini_budget():
-    """Cho phep Gemini quay lai sau khi vong truoc het tran, thay vi bi dead_key ca run
-       (sua loi B). KHONG reset _GEMINI_OK_COUNT vi NO DA BI XOAI (sua loi D)."""
     global _GEMINI_LOOP_BUDGET, _GEMINI_LOOP_EXHAUSTED
     _GEMINI_LOOP_BUDGET = C.GEMINI_MAX_CALLS
     _GEMINI_LOOP_EXHAUSTED = False
@@ -182,7 +180,11 @@ def _current_gemini_model():
 
 
 # ================= Goi gemini + QUAY CHUOI khi 5xx + phan loai loi =================
-def _gemini_call(png_bytes):
+def _gemini_call(png_bytes, rec):
+    """Thu lan luot model trong chuoi den khi 200. Khi 200 -> rec['gemini_model']=model (de
+       _engine_label/_engine_display in dung slug THAT da doc, khong con 'gemini:chain').
+       Budget decrement MOI lan goi (ke ca 5xx/404) vi no la luoi chong SPAM request, khong
+       phai chong tien (pricing: chi 200 moi tinh). Tra (texts|None, status)."""
     global _GEMINI_LOOP_BUDGET, _GEMINI_DEAD_KEY
     while True:
         model, status = _current_gemini_model()
@@ -214,6 +216,7 @@ def _gemini_call(png_bytes):
                 return None, "net"
             parts = (cands[0].get("content") or {}).get("parts") or []
             txt = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+            rec["gemini_model"] = model                 # <-- model THANG, gan vao video
             sleep(C.GEMINI_THROTTLE_SEC)
             return ([txt] if txt else []), "ok"
         if sc in (500, 502, 503, 504):
@@ -256,7 +259,7 @@ def _gemini_pass(rec):
     except Exception as e:
         log_warn("Gemini: khong doc duoc anh goc:", e.__class__.__name__)
         return
-    texts, status = _gemini_call(png)
+    texts, status = _gemini_call(png, rec)
     if status != "ok" or texts is None:
         return                                # busy/dead/budget/net -> gemini_done van False
     rec["gemini_done"] = True
@@ -331,7 +334,7 @@ def _new_rec(v):
     return {"video_id": v["video_id"], "thumb": v["thumb_url"], "title": v.get("title", ""),
             "video_url": v.get("video_url", ""), "recipes_used": [], "reads": {},
             "raw": "", "tried": [], "tries": 0, "alerts": 0, "done": None, "pinged": False,
-            "gemini_done": False, "pending_since": None}
+            "gemini_done": False, "pending_since": None, "gemini_model": ""}
 
 
 def _fetch_bytes(url):
@@ -452,7 +455,21 @@ def _ensure_candidate(rec, authoritative):
         _run_recipe_local(rec, len(rec["recipes_used"]))
 
 
-def _engine_label():
+def _pretty_model(slug):
+    """'gemini-3.5-flash-lite' -> 'Gemini 3.5 Flash Lite'. Khong match slug -> tra nguyen."""
+    if not slug:
+        return ""
+    return " ".join(p.capitalize() for p in slug.split("-") if p)
+
+
+def _engine_label(rec=None):
+    """Slug THAT neu video da duoc model nao doc (rec['gemini_model']); khong thi fallback
+       theo trang thai chuoi. Log workflow co the van in 'gemini:chain' o dong gate (chua
+       co model thang); EMBED Discord se in slug that qua _engine_display(rec)."""
+    if rec is not None:
+        m = (rec.get("gemini_model") or "").strip()
+        if m:
+            return m
     if _GEMINI_DEAD_KEY or not C.GEMINI_API_KEY:
         return "local(gemini off)"
     if _gemini_busy_window_active():
@@ -465,8 +482,13 @@ def _engine_label():
     return "local(no gemini slug)"
 
 
-def _engine_display():
-    """Nhan cho nguoi doc, khong phai label ky thuat cua _engine_label()."""
+def _engine_display(rec=None):
+    """Nhan dep cho nguoi doc: 'Gemini 3.5 Flash Lite' khi da biet model thang;
+       'Gemini' khi chuoi gemini song nhung chua co slug; 'EasyOCR' khi local."""
+    if rec is not None:
+        m = (rec.get("gemini_model") or "").strip()
+        if m:
+            return _pretty_model(m) or "Gemini"
     lab = _engine_label()
     if "gemini" in lab and "off" not in lab and "no gemini" not in lab:
         return "Gemini"
@@ -546,11 +568,11 @@ def _alert(rec, code, note, redeem_flag):
     rec["alerts"] += 1
     entry = {
         "code": code,
-        "title": _resolve_title(rec),                      # <-- title that, khong con "Dang phat"
+        "title": _resolve_title(rec),                      # <-- title that, khong con banned/rong
         "video_url": rec["video_url"], "thumb_url": rec["thumb"],
         "channel_avatar": rec.get("channel_avatar", ""),
         "via": "OCR", "redeem": redeem_flag,
-        "engine_display": _engine_display(),               # <-- "Model Gemini da doc duoc:"
+        "engine_display": _engine_display(rec),            # <-- "Gemini 3.5 Flash Lite"
         "ocr_text": rec["raw"], "ocr_note": note,
     }
     # Bỏ "conf": webhook.msg_yt_alert se khong in dong Do tin OCR nua.
@@ -593,9 +615,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         return
     known = known_codes or set()
     mem = load_mem()
-    gc_removed = _gc_expired_pending(mem, now)   # <-- THEM: don backlog truoc khi xu ly
+    gc_removed = _gc_expired_pending(mem, now)   # don backlog truoc khi xu ly
     budget_end = time.monotonic() + C.OCR_LOOP_BUDGET
-    changed = bool(gc_removed)                    # <-- neu GC xoa thi phai commit
+    changed = bool(gc_removed)                    # neu GC xoa thi phai commit
     deep_used = 0
     for v in bare_videos:
         rec = mem.setdefault(v["video_id"], _new_rec(v))
@@ -630,18 +652,18 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
             if cand is None:
                 if finalize:
                     rec["done"] = "exhausted"
-                    log_warn(f"OCR[{_engine_label()}] co chu CODE nhung khong doc duoc ma "
+                    log_warn(f"OCR[{_engine_label(rec)}] co chu CODE nhung khong doc duoc ma "
                              f"({rec['video_id']}) -> PING nhap tay")
-                    _ping(rec, f"Ảnh CÓ chữ CODE nhưng engine {_engine_label()} không đọc được "
+                    _ping(rec, f"Ảnh CÓ chữ CODE nhưng engine {_engine_label(rec)} không đọc được "
                                f"mã chắc chắn.")
                 else:
                     if _hold_pending(rec, now):
                         rec["done"] = "exhausted"
-                        log_warn(f"OCR[{_engine_label()}] cho gemini qua lau ({rec['video_id']}) "
+                        log_warn(f"OCR[{_engine_label(rec)}] cho gemini qua lau ({rec['video_id']}) "
                                  f"-> PING nhap tay (khong the cho mai)")
                         _ping(rec, "Đã chờ Gemini qua lâu mà local vẫn không đọc được mã chắc chắn.")
                     else:
-                        log_yt(f"OCR[{_engine_label()}] local het recipe ma van busy/het-tran -> "
+                        log_yt(f"OCR[{_engine_label(rec)}] local het recipe ma van busy/het-tran -> "
                                f"GIU PENDING {rec['video_id']} cho vong sau")
                 changed = True
                 break
@@ -652,9 +674,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 changed = True
                 break
             rec["tries"] += 1
-            note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · engine={_engine_label()} · "
+            note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · engine={_engine_label(rec)} · "
                     f"đã loại: {rec['tried'] or 'chưa có'}")
-            log_yt(f"OCR[{_engine_label()}] thu #{rec['tries']}: `{cand}` "
+            log_yt(f"OCR[{_engine_label(rec)}] thu #{rec['tries']}: `{cand}` "
                    f"(video {rec['video_id']}) [quota {deep_used}/{C.OCR_MAX_IMAGES}]")
             _alert(rec, cand, note, True)
             changed = True
@@ -677,9 +699,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         else:
             if rec["tries"] >= C.OCR_MAX_TRIES and not rec.get("done"):
                 rec["done"] = "exhausted"
-                log_warn(f"OCR[{_engine_label()}] dat gioi han {C.OCR_MAX_TRIES} luot cho "
+                log_warn(f"OCR[{_engine_label(rec)}] dat gioi han {C.OCR_MAX_TRIES} luot cho "
                          f"{rec['video_id']} ma van bi tu choi -> PING nhap tay")
-                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt (engine {_engine_label()}) mà "
+                _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt (engine {_engine_label(rec)}) mà "
                            f"mọi mã đọc được đều bị server từ chối.")
                 changed = True
     if changed:
@@ -721,7 +743,7 @@ def alert_only(bare_videos, known_codes=None):
             changed = True
             continue
         _alert(rec, cand or "(chưa đọc được mã)",
-               f"Chế độ OCR = alert (engine {_engine_label()}): bot CHỈ báo, không tự nhập.",
+               f"Chế độ OCR = alert (engine {_engine_label(rec)}): bot CHỈ báo, không tự nhập.",
                False)
         rec["done"] = "alerted"
         changed = True
