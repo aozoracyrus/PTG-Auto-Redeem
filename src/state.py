@@ -1,5 +1,3 @@
-# Lich su "MA|ID" + commit/push nguoc. CHONG SPAM: pull --rebase --autostash TRUOC push
-# + VERIFY exit code push (truoc day push fail im lang -> mat state giua run).
 import os, subprocess
 from .utils import log_state, log_warn, log_err
 
@@ -26,14 +24,14 @@ def commit_and_push_state(s):
 def _sh(cmd, check=False, capture=False):
     r = subprocess.run(cmd, shell=True, cwd=os.getcwd(), capture_output=capture, text=True)
     if check and r.returncode != 0:
-        raise RuntimeError(f"{cmd} ma_loi={r.returncode} loi={(r.stderr or '')[:200]}")
+        raise RuntimeError(f"{cmd} rc={r.returncode} err={(r.stderr or '')[:200]}")
     return r.returncode, (r.stdout or "")
 
 
 def commit_paths(paths, message):
     token, repo = os.getenv("GITHUB_TOKEN"), os.getenv("GITHUB_REPOSITORY")
     if not token or not repo:
-        log_warn("KHONG push (thieu GITHUB_TOKEN hoac GITHUB_REPOSITORY)")
+        log_warn("KHONG push (thieu GITHUB_TOKEN/GITHUB_REPOSITORY)")
         return
     ref = os.getenv("GITHUB_REF_NAME", "main")
     try:
@@ -44,7 +42,7 @@ def commit_paths(paths, message):
             _sh(f'git add {p}')
         dirty = _sh('git status --porcelain ' + ' '.join(paths), capture=True)[1].strip()
         if not dirty:
-            log_state("State khong doi, khong commit")
+            log_state("State khong doi")
             return
         _sh(f'git commit -m "{message}"')
         _sh(f'git pull --rebase --autostash origin {ref}')
@@ -52,7 +50,6 @@ def commit_paths(paths, message):
         if rc == 0:
             log_state("Da push:", ", ".join(paths))
         else:
-            log_err(f"PUSH FAIL (ma_loi={rc}) -> state/queue CO THE MAT giua run. "
-                    f"Kiem tra quyen ghi / scope PAT_TOKEN (contents).")
+            log_err(f"PUSH FAIL (rc={rc})")
     except Exception as e:
         log_err("Loi khi push:", e)
