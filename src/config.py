@@ -54,7 +54,7 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-# TAM = 15 de TEST; sau khi OCR doc DUNG ma trong anh -> RU VE 3.
+# TAM = 15 de TEST OCR; sau khi thay Gemini doc DUNG ma trong anh -> RU VE 3.
 YT_VIDEO_SCAN = 15
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
@@ -69,18 +69,23 @@ YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
 # ================= NEO TRICH MA =================
-# Mot regex duy nhat dung CHUNG cho title/mo ta/OCR: C[OÔ][\s.:|_-]*D[EÉ] + "CHUNG" tuy
-# chon => CODE / CODE CHUNG / CÔ DÉ / CÔ DÉ CHUNG / CO DE / CODE: ...
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
 YT_KEYWORD_RE   = re.compile(KEYWORD_PATTERN, re.I)
 CODE_PREFIXES = ["PT"]
 CODE_MIN_LEN  = 6
 
-# ================= OCR =================
+# ================= OCR: GEMINI (uu tien) > EASYOCR > TESSERACT =================
+# Gemini la vision-LLM -> doc font cach dieu / do bong / tieng Viet co dau ma EasyOCR/Tesseract
+#   bo sot (pill "CO.DE PTMERGEHOTEL1029"). Goi qua REST (requests) de on dinh + khong them
+#   dependency nang. Khong co key / loi mang -> tu fallback EasyOCR roi Tesseract (offline).
+# OCR_ENGINE: auto = gemini(neu co key) > easy > tess | ep bang "gemini"/"easy"/"tess".
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
-# TAM = 8 de TEST OCR (sau khi loc live, 8 upload dau duoc quet -> video ma-trong-anh chac
-# chan lot vao). Sau khi thay OCR doc DUNG -> RU VE 3.
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL    = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash")
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
+# TAM = 8 de TEST; sau khi OCR doc DUNG -> RU VE 3.
 OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "8"))
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
