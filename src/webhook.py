@@ -1,19 +1,21 @@
 # Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG embed V1).
-# Docs KB (discord-webhook.com + docs.discord4j.com) xac nhan:
+# Docs KB (docs.discord.com + discord-webhook.com + docs.discord4j.com) xac nhan:
 #   (1) flags=32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
 #   (2) webhook BAT BUOC ?with_components=true -> thieu thi components bi bo qua (day la
-#       nguyen nhan 400 {"components":["0"]} ngay xua, khong phai schema sai).
-#   (3) Container(17) allowed children = TextDisplay/Separator/Section/MediaGallery/ActionRow/File;
-#       max 10 component/container (ta dung 3); TextDisplay content <=4000 ky tu; MediaGallery
-#       items <=10. accent_color = spine trai (vang/xanh/do/cam).
-# CAU TRUC TIN CO ANH (sua "thumbnail nho" + "footer o duoi" + "title Them vao danh sach cho"):
+#       nguyen nhan 400 {"components":["0"]} ngay xua, khong phai schema sai);
+#   (3) Container(17) allowed children = TextDisplay/Separator/Section/MediaGallery/
+#       ActionRow/File; max 10 component/container (ta dung 3); TextDisplay content <=4000
+#       ky tu; MediaGallery items <=10. accent_color = spine trai (chi bao mau chinh thuc).
+# CAU TRUC TIN CO ANH:
 #   Container(17){ accent_color, components:[
 #       Section(9){ TextDisplay(10)=noi dung, accessory=Thumbnail(11)=avatar },
-#       MediaGallery(12){ items:[ thumbnail ] },   <- 1 item = TO + click zoom (docs ghi ro)
-#       TextDisplay(10)=footer ]                    <- footer DUOI anh (yeu cau ban)
+#       MediaGallery(12){ items:[ thumbnail ] },   <- 1 item = TO + click zoom
+#       TextDisplay(10)=footer ]                    <- footer DUOI anh
 #   }
+# KHONG con emoji vuong prefix (🟨/🟥/🟩/🟧): accent_color da la chi bao mau; emoji vuong
+#   chi trung tin. Cac emoji noi dung (🔔/✅/❌/️/🆘) van giu vi do la chu, khong phai mau.
 # SUA "Them vao danh sach cho???": title rong -> LINK THUAN '[Xem video](url)', KHONG bia
-#   'Ma <code>' lam anchor (do la thu sinh placeholder YouTube client). Co title -> [title](url).
+#   'Ma <code>' lam anchor. Co title -> [title](url).
 # AN TOAN: 400 -> log payload+body, fallback TextDisplay-only PHANG (van flags 32768 = V2).
 import os, json, requests
 from datetime import datetime, timezone, timedelta
@@ -25,7 +27,6 @@ C_FAILURE = 0xE74C3C
 C_ALERT   = 0xF1C40F
 C_STATUS  = 0xE67E22
 _FLAG_V2  = 1 << 15
-_SQUARE   = {C_SUCCESS: "🟩", C_FAILURE: "🟥", C_ALERT: "🟨", C_STATUS: "🟧"}
 
 try:
     from zoneinfo import ZoneInfo
@@ -58,12 +59,10 @@ def _gallery_one(url):
 
 def _container(text_lines, color, avatar_url=None, thumb_url=None, footer=None, mention_uid=None):
     """Container(17) = [Section(chu+avatar)|TextDisplay(chu), MediaGallery(thumb), TextDisplay(footer)].
-       footer tach rieng de nam DUOI anh (yeu cau ban). Tra (payload, body_flat) de send() co the
+       KHONG con emoji prefix: accent_color = spine trai, da duoc docs xac nhan la chi bao mau
+       chinh thuc. footer tach rieng de nam DUOI anh. Tra (payload, body_flat) de send() co the
        fallback phang khi 400."""
     body = "\n".join(x for x in text_lines if x is not None)
-    sq = _SQUARE.get(color, "")
-    if sq:
-        body = f"{sq} {body}"
     kids = []
     av = (avatar_url or "").strip()
     if av and av.startswith("http"):
