@@ -2,10 +2,9 @@
 # queue+cooldown ma text -> redeem -> OCR (auto/alert, co dedupe cross-tang + budget-per-loop)
 # -> webhook (Components V2 thuan tuy) -> commit state/queue/ocr_memory.
 #
-# HAI DIEM DOI SO BAN CU (sua loi A + B):
+# DIEM DOI SO BAN CU:
 #   (A) YT_COOLDOWN lay tu config.C (truoc day dinh nghia o day -> ocr.py goi C.YT_COOLDOWN
 #       bi AttributeError -> crash giua _alert -> candidate doc duong bi bo, khong nhap).
-#       Nay config.py chua YT_COOLDOWN; main.py tham chieu ve do -> het "dinh nghia 2 noi".
 #   (B) ocr.reset_gemini_budget() goi DAU MOI VONG LAP -> tran Gemini la per-LOOP (khong con
 #       per-process tich luy qua ~345 vong gay dead_key oan -> EasyOCR lanh -> doc sai pill).
 import os, sys, time
