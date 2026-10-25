@@ -1,15 +1,15 @@
-# TRICH MA GIFT TU TIEU DE / MO TA / TEXT OCR.
+# TRICH MA GIFT.
+# NEO: C[OÔ][\s.:|_-]*D[EÉ] + "CHUNG" tuỳ chọn
+#   => CODE / CODE CHUNG / CÔ DÉ / CÔ DÉ CHUNG / CO DE / CODE: ...
 #
-# BUG CAT MA DA SUA: ban cu co nhom "vun" tham lam giua neo va ma -> nuot 5 ky tu dau
-#   (PT26BATPET->BATPET, SWEETHALLOWEEN->HALLOWEEN) -> nhap ma cut -> 2106 -> spam probe.
-# LUA HIEN TAI (dung lenh ban: lay NGAY SAU neo, khong bo qua gi):
-#   1) STRICT: token [A-Z0-9]{>=CODE_MIN_LEN} DINH ngay sau neo (chi cho phep dau cach /
-#      dau cau). KHONG nhom vun => KHONG cat duoc ma.
-#   2) JOIN (CHI khi STRICT truot = anh OCR gian cach chu): ghep manh >=2 ky tu lien tiep,
-#      dung o manh 1 ky tu (chu Viet vo dau), uu tien mo dau prefix roi den chua so;
-#      ung vien ghep phai chua SO hoac mo dau prefix (chong rac GAMEPLAYTOGETHER).
-# NEO: KW = C[OÔ][\s.:|_-]*D[EÉ] phu CODE / CÔ DÉ / CÔ.DÉ / CO DE / CODE: ... ; tuy chon
-#   "CHUNG" di sau. Muon bo CÔ DÉ: _KW = r"CO[\s.:|_-]*DE".
+# STRICT: token [A-Z0-9]{>=6} dính ngay sau neo (cho title/desc).
+# JOIN: chỉ cho OCR (khi chữ bị giãn cách), ghép mảnh >=2 ký tự,
+#   dừng ở mảnh 1 ký tự (chữ Việt vỡ dấu), chốt: prefix known HOẶC (chứa số VÀ len>=10).
+#
+# MA TRAN:
+#   Title:  strict only (không join) -> không sinh mã giả từ ngày tháng
+#   Desc:   strict only
+#   OCR:    strict + join (ảnh pill giãn chữ)
 import re
 from . import config as C
 
@@ -23,12 +23,13 @@ _PIECE_RE = re.compile(r"[A-Z0-9]+")
 
 _JOIN_MAX_PIECES = 6
 _JOIN_MAX_LEN = 24
+_JOIN_MIN_LEN_WITH_DIGIT = 10
 
 
-def _guard(tok):
-    if any(ch.isdigit() for ch in tok):
+def _guard_join(tok):
+    if any(tok.startswith(p) for p in _PREFIXES):
         return True
-    return any(tok.startswith(p) for p in _PREFIXES)
+    return len(tok) >= _JOIN_MIN_LEN_WITH_DIGIT and any(ch.isdigit() for ch in tok)
 
 
 def _join_candidates(rest):
@@ -61,26 +62,35 @@ def _choose(joined):
     return ""
 
 
-def _all_candidates(t):
+def _all_candidates(t, allow_join):
     out = []
     for m in _KW_POS_RE.finditer(t):
         rest = t[m.end():]
         mt = _TOK_RE.match(rest)
         if mt:
             tok = mt.group(0)
-        else:
+        elif allow_join:
             tok = _choose(_join_candidates(rest))
-            if tok and not _guard(tok):
+            if tok and not _guard_join(tok):
                 tok = ""
+        else:
+            tok = ""
         if tok and tok not in out:
             out.append(tok)
     return out
 
 
 def code_sau_keyword_yt(title):
-    cands = _all_candidates((title or "").upper())
+    """Title: strict only."""
+    cands = _all_candidates((title or "").upper(), False)
     return [cands[0]] if cands else []
 
 
+def code_from_desc_text(desc):
+    """Mô tả: strict only."""
+    return _all_candidates((desc or "").upper(), False)
+
+
 def code_from_ocr_text(text):
-    return _all_candidates((text or "").upper())
+    """OCR: strict + join."""
+    return _all_candidates((text or "").upper(), True)
