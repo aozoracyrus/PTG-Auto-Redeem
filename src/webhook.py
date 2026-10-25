@@ -1,6 +1,15 @@
-# Discord Components V2 + fallback embed.
-# V2: container(17) + section(9) + text-display(10) + thumbnail(11).
-# Emoji màu đầu dòng để phân loại bằng mắt.
+# Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG con embed V1).
+# HAI DIEU KIEN BAT BUOC cho webhook V2 (theo docs.discord.com):
+#   (1) flags = 32768 (IS_COMPONENTS_V2) -> tat content/embeds/stickers/poll o top-level;
+#   (2) query param ?with_components=true -> NEU THIEU thi components bi bo qua / bi 400.
+#       Day chinh la nguyen nhan lan truoc bi "Discord tu choi V2 (400)": code cu co flags
+#       nhung KHONG co query param -> Discord reject -> roi vao fallback V1. Giu ba het V1.
+# CAU TRUC: Container(17){accent_color, components:[Section(9){components:[TextDisplay(10)],
+#   accessory: Thumbnail(11){media.url}}]}. Thumbnail type 11 render RELIABLE -> hien DU
+#   ca avatar kenh (accessory section 1) lan thumbnail video (accessory section 2), khac
+#   author.icon_url cua embed V1 hay bi nuot.
+# MAU: accent_color = spine doc (vang/xanh/do/cam); them o mau emoji dau dong de doc la
+#   biet loai tin ma khong can nhin spine.
 import os, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
@@ -24,6 +33,7 @@ def _vn_hhmm():
     return datetime.now(_TZ).strftime("%H:%M")
 
 
+# ---------------- Components V2 builders ----------------
 def _td(content):
     return {"type": 10, "content": content}
 
@@ -39,101 +49,79 @@ def _section(lines, accessory_url=None):
     return s
 
 
-def _v2(children, color, mention_uid=None):
-    p = {"flags": _FLAG_V2,
-         "components": [{"type": 17, "accent_color": color, "components": children}]}
+def _tag(children, color):
+    """Prepends o mau emoji vao TextDisplay dau cua Section dau (de phan loai bang mat)."""
+    sq = _SQUARE.get(color, "")
+    if sq and children:
+        comps = children[0].get("components") or []
+        if comps and comps[0].get("type") == 10:
+            comps[0]["content"] = f"{sq} {comps[0]['content']}"
+    return children
+
+
+def _wrap(children, color, mention_uid=None):
+    """Payload V2 hoan chinh: flags + container; them allowed_mentions chi khi co ping."""
+    cont = {"type": 17, "accent_color": color, "components": _tag(children, color)}
+    p = {"flags": _FLAG_V2, "components": [cont]}
     if mention_uid:
         p["allowed_mentions"] = {"users": [mention_uid]}
     return p
 
 
-def _both(v2_children, color, legacy_embeds, mention_uid=None, legacy_content=None):
-    sq = _SQUARE.get(color, "")
-    if sq and v2_children:
-        first = v2_children[0]["components"][0]
-        first["content"] = f"{sq} {first['content']}"
-    legacy = {"embeds": legacy_embeds}
-    if legacy_content:
-        legacy["content"] = legacy_content
-        legacy["allowed_mentions"] = {"users": [mention_uid]} if mention_uid else {"parse": []}
-    return {"v2": _v2(v2_children, color, mention_uid), "legacy": legacy}
-
-
-def _embed(title, description, color, url=None, image=None, author=None, footer=None):
-    e = {"title": title, "description": description, "color": color}
-    if url:    e["url"] = url
-    if image:  e["image"] = {"url": image}
-    if author: e["author"] = author
-    if footer: e["footer"] = {"text": footer}
-    return e
-
-
-def _author_obj(avatar=None):
-    a = {"name": getattr(C, "YT_CHANNEL_NAME", "Play Together VNG"),
-         "url":   getattr(C, "YT_CHANNEL_URL",
-                          "https://www.youtube.com/@PlayTogetherVNGofficial/videos")}
-    av = (avatar or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
-    if av:
-        a["icon_url"] = av
-    return a
+# ---------------- send (V2-only, tu them query param) ----------------
+def _with_components(url):
+    """Webhook V2 BAT BUOC ?with_components=true; neu thieu -> Discord reject/400."""
+    if "with_components=" in url:
+        return url
+    return url + ("&" if "?" in url else "?") + "with_components=true"
 
 
 def send(payload):
     url = os.getenv("DISCORD_WEBHOOK")
     if not url:
-        log_hook("Bo qua webhook")
+        log_hook("Bo qua webhook (chua set DISCORD_WEBHOOK)")
         return
-
-    def post(body):
-        return requests.post(url, json=body, timeout=15)
-
-    r = None
+    if isinstance(payload, dict) and payload.get("flags"):
+        target = _with_components(url)
+        body = payload
+    elif isinstance(payload, dict):
+        target, body = url, payload
+    else:
+        target, body = url, {"content": payload, "allowed_mentions": {"parse": []}}
     try:
-        if isinstance(payload, dict) and "v2" in payload:
-            r = post(payload["v2"])
-            if r.status_code == 400 and payload.get("legacy"):
-                log_hook("Discord tu choi V2 (400) -> fallback embed")
-                r = post(payload["legacy"])
-        elif isinstance(payload, dict):
-            r = post(payload)
-        else:
-            r = post({"content": payload, "allowed_mentions": {"parse": []}})
+        r = requests.post(target, json=body, timeout=15)
+        if r.status_code >= 400:
+            # Log body loi de lan sau co bang chung debug (khong im lang mat tin).
+            log_err("Webhook HTTP", r.status_code, (r.text or "")[:300])
     except Exception as e:
-        log_err("Loi webhook:", e)
-        return
-    if r is not None and r.status_code >= 400:
-        log_err("Webhook HTTP", r.status_code, (r.text or "")[:200])
+        log_err("Loi khi gui webhook:", e)
 
 
+# ---------------- cac loai tin nhan ----------------
 def msg_success(code, uid):
     lines = ["**✅ Nhập thành công**", f'Code `{code}` đã nhập thành công cho ID `{uid}`']
-    return _both([_section(lines)], C_SUCCESS,
-                 [_embed("✅ Nhập thành công",
-                         f'Code "{code}" đã nhập thành công cho ID "{uid}"', C_SUCCESS)])
+    return _wrap([_section(lines)], C_SUCCESS)
 
 
 def msg_failure(code, uid, reason):
     lines = ["**❌ Nhập thất bại**", f'Code `{code}` thất bại cho ID `{uid}` với lí do "{reason}"']
-    return _both([_section(lines)], C_FAILURE,
-                 [_embed(" Nhập thất bại",
-                         f'Code "{code}" thất bại cho ID "{uid}" với lí do "{reason}"', C_FAILURE)])
+    return _wrap([_section(lines)], C_FAILURE)
 
 
 def msg_status(reason, n_pending):
     lines = ["**⚠️ Bot đang kẹt**", reason,
-             f'({n_pending} code đang chờ trong queue)']
-    return _both([_section(lines)], C_STATUS,
-                 [_embed("⚠️ Bot đang kẹt",
-                         f'{reason}\n({n_pending} code đang chờ)', C_STATUS)])
+             f"({n_pending} code đang chờ trong queue, không chốt failure oan, "
+             f"sẽ tự thử lại khi mở khoá.)"]
+    return _wrap([_section(lines)], C_STATUS)
 
 
 def msg_yt_alert(entry, cooldown_s):
-    code  = entry.get("code", "")
-    title = (entry.get("title") or f"Mã {code}").strip()
-    vurl  = entry.get("video_url", "")
-    thumb = entry.get("thumb_url", "")
+    code   = entry.get("code", "")
+    title  = (entry.get("title") or f"Mã {code}").strip()
+    vurl   = entry.get("video_url", "")
+    thumb  = entry.get("thumb_url", "")
     avatar = (entry.get("channel_avatar") or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
-    via   = entry.get("via", "TITLE")
+    via    = entry.get("via", "TITLE")
     src_label = {"TITLE": "tiêu đề", "DESC": "mô tả video",
                  "OCR": "ảnh thumbnail (OCR)"}.get(via, via)
 
@@ -145,37 +133,35 @@ def msg_yt_alert(entry, cooldown_s):
         if not entry.get("redeem", True):
             lines.append("⛔ OCR = **alert**: bot CHỈ báo, không tự nhập.")
         else:
-            lines.append("🔁 OCR = **auto**: bot tự thử và tự sửa nếu server từ chối.")
+            lines.append("🔁 OCR = **auto**: bot tự thử và tự sửa nếu server từ chối mã.")
         conf = entry.get("conf", "")
-        lines.append("🔎 Độ tin OCR: " + ("CAO (consensus ≥2)" if conf == "high" else "THẤP (1 lượt)"))
+        lines.append("🔎 Độ tin OCR: " + ("CAO (consensus ≥2 lượt đọc)" if conf == "high"
+                                          else "THẤP (1 lượt đọc)"))
         note = (entry.get("ocr_note") or "").strip()
         if note:
             lines.append(f"🧭 {note}")
         raw = (entry.get("ocr_text") or "").strip()
         if raw:
-            lines.append(f"📝 Text OCR: `{raw[:240]}`")
-    foot = f'Code "{code}" phát hiện lúc {_vn_hhmm()} (giờ VN)'
+            lines.append(f"📝 Text OCR thô: `{raw[:240]}`")
+    foot = f'Code "{code}" đã được phát hiện lúc {_vn_hhmm()} (giờ VN)'
 
+    # Section 1 accessory = avatar kenh; Section 2 accessory = thumbnail video.
+    # Hai thumbnail type 11 -> ca hai anh deu render (day la ly do chuyen V2).
     children = [_section(lines, avatar or None)]
-    if thumb:
-        children.append(_section([foot], thumb))
-    else:
-        children.append(_section([foot]))
-
-    legacy = _embed(title, "\n".join(lines[2:]), C_ALERT,
-                    url=vurl or None, image=thumb or None,
-                    author=_author_obj(avatar), footer=foot)
-    return _both(children, C_ALERT, [legacy])
+    children.append(_section([foot], thumb or None))
+    return _wrap(children, C_ALERT)
 
 
 def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, avatar=""):
+    """PING khi OCR be tac. Mention <@id> nam trong TextDisplay dau + allowed_mentions
+       mo dung 1 user -> ping that; section 1 accessory = avatar, section 2 = thumbnail."""
     uid = (getattr(C, "OCR_PING_USER", "") or "1160199218313564210").strip()
-    av = (avatar or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
+    av  = (avatar or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
     lines = [f"<@{uid}>"] if uid else []
     lines += [
         "**🆘 OCR bế tắc — cần nhập code bằng tay**",
         f"Video: [{title or video_url}]({video_url})" if video_url else f"Video: {title}",
-        f"Các mã OCR đã thử và bị từ chối: "
+        f"Các mã OCR đã thử và bị server từ chối: "
         f"`{', '.join(tried) if tried else '(chưa đọc được mã nào)'}`",
     ]
     if note:
@@ -185,14 +171,5 @@ def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, 
     foot = f"Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử"
 
     children = [_section(lines, av or None)]
-    if thumb_url:
-        children.append(_section([foot], thumb_url))
-    else:
-        children.append(_section([foot]))
-
-    legacy_desc = "\n".join(lines[1:])
-    legacy = _embed("🆘 OCR không đọc được mã", legacy_desc, C_FAILURE,
-                    url=video_url or None, image=thumb_url or None,
-                    author=_author_obj(av), footer=foot)
-    return _both(children, C_FAILURE, [legacy],
-                 mention_uid=uid or None, legacy_content=(f"<@{uid}>" if uid else None))
+    children.append(_section([foot], thumb_url or None))
+    return _wrap(children, C_FAILURE, mention_uid=uid or None)
