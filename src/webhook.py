@@ -1,14 +1,15 @@
 # Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG embed V1).
-# HAI DIEU KIEN BAT BUOC (docs.discord.com):
-#   (1) flags = 32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
-#   (2) query ?with_components=true -> thieu thi components bi bo qua.
-# CAU TRUC TIN CO ANH (sua "thumbnail nho"):
-#   Container(17) -> [ Section(9){ TextDisplay(10)=noi dung, accessory=Thumbnail(11)=avatar },
-#                      MediaGallery(12){ items:[ thumbnail ] } ]
-#   LY DO: MediaGallery nhieu item = GRID (moi o bi ep nho); MediaGallery DUNG 1 item =
-#   render FULL-WIDTH, giu ty le, CLICK mo lightbox ZOOM TO. Avatar thi hop lam accessory
-#   (o vuong nho goc phai, dung chat icon kenh). Tam tac: avatar = accessory, thumbnail =
-#   gallery 1 item -> thumbnail phong to duoc ma avatar van yen.
+# Docs.discord.com/xac nhan (KB ban vua nap):
+#   (1) flags=32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
+#   (2) webhook BAT BUOC ?with_components=true -> thieu thi components bi bo qua (day la
+#       nguyen nhan 400 {"components":["0"]} ngay xua, khong phai schema sai).
+# CAU TRUC TIN CO ANH (docs Container allowed children = TextDisplay/Separator/Section/
+#   MediaGallery/ActionRow/File; max 10/container, ta dung 3):
+#   Container(17){ accent_color, components:[
+#       Section(9){ TextDisplay(10)=noi dung, accessory=Thumbnail(11)=avatar },
+#       MediaGallery(12){ items:[ thumbnail ] },   <- 1 item = TO + click zoom (docs ghi ro)
+#       TextDisplay(10)=footer ]                    <- footer DUOI anh (yeu cau ban)
+#   }
 # accent_color = spine trai (vang/xanh/do/cam). AN TOAN: 400 -> log payload+body, fallback
 #   sang TextDisplay-only PHANG (van flags 32768 = V2, khong quay lai V1) de mat tin.
 import os, json, requests
@@ -44,17 +45,18 @@ def _accessory(url):
 
 
 def _gallery_one(url):
-    """MediaGallery(12) voi DUNG 1 item -> Discord render TO, click zoom. (Nhieu item =
-       grid nho -> do la nguyen nhan thumbnail bi be o ban truoc.)"""
+    """MediaGallery(12) voi DUNG 1 item -> Discord render FULL-WIDTH, click mo lightbox ZOOM
+       TO. Nhieu item = grid nho -> do la nguyen nhan thumbnail bi be o ban truoc."""
     url = (url or "").strip()
     if not url or not url.startswith("http"):
         return None
     return {"type": 12, "items": [{"media": {"url": url}}]}
 
 
-def _container(text_lines, color, avatar_url=None, thumb_url=None, mention_uid=None):
-    """Xay Container(17). avatar -> Section.accessory; thumb -> MediaGallery 1 item (to).
-       Tra (payload, body_flat) de send() co the fallback phang khi 400."""
+def _container(text_lines, color, avatar_url=None, thumb_url=None, footer=None, mention_uid=None):
+    """Container(17) = [Section(chu+avatar)|TextDisplay(chu), MediaGallery(thumb), TextDisplay(footer)].
+       footer tach rieng de nam DUOI anh (yeu cau ban). Tra (payload, body_flat) de send() co the
+       fallback phang khi 400."""
     body = "\n".join(x for x in text_lines if x is not None)
     sq = _SQUARE.get(color, "")
     if sq:
@@ -62,18 +64,21 @@ def _container(text_lines, color, avatar_url=None, thumb_url=None, mention_uid=N
     kids = []
     av = (avatar_url or "").strip()
     if av and av.startswith("http"):
-        # Section: chu ben trai + avatar ben phai (accessory).
         kids.append({"type": 9, "components": [_td(body)], "accessory": _accessory(av)})
     else:
         kids.append(_td(body))
     g = _gallery_one(thumb_url)
     if g:
         kids.append(g)            # thumbnail video: 1 item -> phong to + zoom
+    ft = (footer or "").strip()
+    if ft:
+        kids.append(_td(ft))      # <-- footer SAU gallery = duoi anh
     cont = {"type": 17, "accent_color": color, "components": kids}
     p = {"flags": _FLAG_V2, "components": [cont]}
     if mention_uid:
         p["allowed_mentions"] = {"users": [mention_uid]}
-    return p, body
+    flat = body + (("\n" + ft) if ft else "")
+    return p, flat
 
 
 def _with_components(url):
@@ -150,18 +155,17 @@ def msg_yt_alert(entry, cooldown_s):
             lines.append("⛔ OCR = **alert**: bot CHỈ báo, không tự nhập.")
         else:
             lines.append("🔁 OCR = **auto**: bot tự thử và tự sửa nếu server từ chối mã.")
-        conf = entry.get("conf", "")
-        lines.append("🔎 Độ tin OCR: " + ("CAO (consensus ≥2 lượt đọc)" if conf == "high"
-                                          else "THẤP (1 lượt đọc)"))
+        # BỎ dong "Do tin OCR" (yeu cau ban).
         note = (entry.get("ocr_note") or "").strip()
         if note:
             lines.append(f"🧭 {note}")
         raw = (entry.get("ocr_text") or "").strip()
         if raw:
-            lines.append(f"📝 Text OCR thô: `{raw[:240]}`")
-    lines.append(f'— Code `{code}` phát hiện lúc {_vn_hhmm()} (giờ VN)')
-    # avatar -> accessory (nho, goc phai); thumb -> MediaGallery 1 item (TO + zoom).
-    return _container(lines, C_ALERT, avatar_url=avatar, thumb_url=thumb)
+            disp = (entry.get("engine_display") or "Gemini").strip()
+            lines.append(f"📝 Model {disp} đã đọc được: `{raw[:240]}`")
+    # Footer tach rieng -> xuong DUOI thumbnail.
+    footer = f'— Code `{code}` phát hiện lúc {_vn_hhmm()} (giờ VN)'
+    return _container(lines, C_ALERT, avatar_url=avatar, thumb_url=thumb, footer=footer)
 
 
 def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, avatar=""):
@@ -178,6 +182,6 @@ def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, 
         lines.append(note)
     lines.append(f"👉 Mở ảnh thumbnail, đọc mã bằng mắt rồi nhập tay tại "
                  f"[trang quy đổi VNG]({C.URL_VN}).")
-    lines.append(f"— Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử")
+    footer = f"— Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử"
     return _container(lines, C_FAILURE, avatar_url=av, thumb_url=thumb_url,
-                      mention_uid=uid or None)
+                      footer=footer, mention_uid=uid or None)
