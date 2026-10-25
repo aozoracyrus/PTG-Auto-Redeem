@@ -1,16 +1,16 @@
-# Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG con embed V1).
-# HAI DIEU KIEN BAT BUOC cho webhook V2 (theo docs.discord.com):
-#   (1) flags = 32768 (IS_COMPONENTS_V2) -> tat content/embeds/stickers/poll o top-level;
-#   (2) query param ?with_components=true -> NEU THIEU thi components bi bo qua / bi 400.
-#       Day chinh la nguyen nhan lan truoc bi "Discord tu choi V2 (400)": code cu co flags
-#       nhung KHONG co query param -> Discord reject -> roi vao fallback V1. Giu ba het V1.
-# CAU TRUC: Container(17){accent_color, components:[Section(9){components:[TextDisplay(10)],
-#   accessory: Thumbnail(11){media.url}}]}. Thumbnail type 11 render RELIABLE -> hien DU
-#   ca avatar kenh (accessory section 1) lan thumbnail video (accessory section 2), khac
-#   author.icon_url cua embed V1 hay bi nuot.
-# MAU: accent_color = spine doc (vang/xanh/do/cam); them o mau emoji dau dong de doc la
-#   biet loai tin ma khong can nhin spine.
-import os, requests
+# Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG embed V1).
+# HAI DIEU KIEN BAT BUOC (docs.discord.com):
+#   (1) flags = 32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
+#   (2) query ?with_components=true -> thieu thi components bi bo qua.
+# CAU TRUC MOI (sua loi 400 {"components":["0"]}): bo Section+accessory (de vap
+#   validation tren webhook execute), chuyen sang pattern ma quest-notifier cua ban dang
+#   dung va chay: Container(17) chua [ TextDisplay(10) = noi dung, MediaGallery(12) =
+#   items:[avatar, thumbnail] ]. MediaGallery la kho chuyen nhieu anh trong 1 muc ->
+#   hien DU ca avatar kenh lan thumbnail video, khong can accessory.
+# accent_color = spine trai (vieng vang/xanh/do/cam) — DA hoat dong (thay trong anh).
+# AN TOAN: 400 -> log payload+body (co bang chung debug) va tu fallback sang
+#   TextDisplay-only PHANG (van flags 32768 = V2, khong quay lai V1) de mat tin.
+import os, json, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
 from .utils import log_hook, log_err
@@ -33,86 +33,94 @@ def _vn_hhmm():
     return datetime.now(_TZ).strftime("%H:%M")
 
 
-# ---------------- Components V2 builders ----------------
 def _td(content):
     return {"type": 10, "content": content}
 
 
-def _thumb(url):
-    return {"type": 11, "media": {"url": url}}
+def _gallery(urls):
+    """MediaGallery(12): moi url = 1 item. Loc rong/trung; toi da 10 item (gioi han V2)."""
+    items, seen = [], set()
+    for u in urls:
+        u = (u or "").strip()
+        if u and u.startswith("http") and u not in seen:
+            seen.add(u)
+            items.append({"media": {"url": u}})
+        if len(items) >= 10:
+            break
+    return {"type": 12, "items": items} if items else None
 
 
-def _section(lines, accessory_url=None):
-    s = {"type": 9, "components": [_td(x) for x in lines]}
-    if accessory_url:
-        s["accessory"] = _thumb(accessory_url)
-    return s
-
-
-def _tag(children, color):
-    """Prepends o mau emoji vao TextDisplay dau cua Section dau (de phan loai bang mat)."""
+def _container(text_lines, color, image_urls=None, mention_uid=None):
+    """Container(17) = [TextDisplay(10) gop noi dung, MediaGallery(12) anh (tuy chon)]."""
+    body = "\n".join(x for x in text_lines if x is not None)
     sq = _SQUARE.get(color, "")
-    if sq and children:
-        comps = children[0].get("components") or []
-        if comps and comps[0].get("type") == 10:
-            comps[0]["content"] = f"{sq} {comps[0]['content']}"
-    return children
-
-
-def _wrap(children, color, mention_uid=None):
-    """Payload V2 hoan chinh: flags + container; them allowed_mentions chi khi co ping."""
-    cont = {"type": 17, "accent_color": color, "components": _tag(children, color)}
+    if sq:
+        body = f"{sq} {body}"
+    kids = [_td(body)]
+    g = _gallery(image_urls or [])
+    if g:
+        kids.append(g)
+    cont = {"type": 17, "accent_color": color, "components": kids}
     p = {"flags": _FLAG_V2, "components": [cont]}
     if mention_uid:
         p["allowed_mentions"] = {"users": [mention_uid]}
-    return p
+    return p, body
 
 
-# ---------------- send (V2-only, tu them query param) ----------------
 def _with_components(url):
-    """Webhook V2 BAT BUOC ?with_components=true; neu thieu -> Discord reject/400."""
     if "with_components=" in url:
         return url
     return url + ("&" if "?" in url else "?") + "with_components=true"
 
 
 def send(payload):
+    """payload = (full_payload, flat_text). Thu V2 co anh; 400 -> log + fallback V2 phang."""
     url = os.getenv("DISCORD_WEBHOOK")
     if not url:
         log_hook("Bo qua webhook (chua set DISCORD_WEBHOOK)")
         return
-    if isinstance(payload, dict) and payload.get("flags"):
-        target = _with_components(url)
-        body = payload
-    elif isinstance(payload, dict):
-        target, body = url, payload
+    if isinstance(payload, tuple):
+        full, flat = payload
     else:
-        target, body = url, {"content": payload, "allowed_mentions": {"parse": []}}
+        full, flat = payload, None
+    target = _with_components(url)
     try:
-        r = requests.post(target, json=body, timeout=15)
-        if r.status_code >= 400:
-            # Log body loi de lan sau co bang chung debug (khong im lang mat tin).
-            log_err("Webhook HTTP", r.status_code, (r.text or "")[:300])
+        r = requests.post(target, json=full, timeout=15)
+        if r.status_code < 400:
+            return
+        log_err("V2 bi tu choi http", r.status_code,
+                "| Discord:", (r.text or "")[:300],
+                "| payload:", json.dumps(full, ensure_ascii=False)[:500])
+        if flat is not None:
+            # Fallback VAN LA V2 (flags 32768), chi bo anh de cham hon validation.
+            flat_payload = {"flags": _FLAG_V2, "components": [_td(flat)]}
+            if full.get("allowed_mentions"):
+                flat_payload["allowed_mentions"] = full["allowed_mentions"]
+            r2 = requests.post(target, json=flat_payload, timeout=15)
+            if r2.status_code >= 400:
+                log_err("V2 phang cung bi tu choi http", r2.status_code,
+                        "| Discord:", (r2.text or "")[:300])
+            else:
+                log_hook("Da gui ban V2 phang (chi chu, khong anh)")
     except Exception as e:
         log_err("Loi khi gui webhook:", e)
 
 
-# ---------------- cac loai tin nhan ----------------
+# ================= cac loai tin nhan =================
 def msg_success(code, uid):
     lines = ["**✅ Nhập thành công**", f'Code `{code}` đã nhập thành công cho ID `{uid}`']
-    return _wrap([_section(lines)], C_SUCCESS)
+    return _container(lines, C_SUCCESS)
 
 
 def msg_failure(code, uid, reason):
     lines = ["**❌ Nhập thất bại**", f'Code `{code}` thất bại cho ID `{uid}` với lí do "{reason}"']
-    return _wrap([_section(lines)], C_FAILURE)
+    return _container(lines, C_FAILURE)
 
 
 def msg_status(reason, n_pending):
     lines = ["**⚠️ Bot đang kẹt**", reason,
-             f"({n_pending} code đang chờ trong queue, không chốt failure oan, "
-             f"sẽ tự thử lại khi mở khoá.)"]
-    return _wrap([_section(lines)], C_STATUS)
+             f"({n_pending} code đang chờ trong queue, không chốt failure oan, sẽ tự thử lại.)"]
+    return _container(lines, C_STATUS)
 
 
 def msg_yt_alert(entry, cooldown_s):
@@ -125,10 +133,10 @@ def msg_yt_alert(entry, cooldown_s):
     src_label = {"TITLE": "tiêu đề", "DESC": "mô tả video",
                  "OCR": "ảnh thumbnail (OCR)"}.get(via, via)
 
-    lines = ["**🔔 Phát hiện code mới (YouTube)**"]
-    lines.append(f"[{title}]({vurl})" if vurl else title)
-    lines.append(f"Mã `{code}` — phát hiện qua **{src_label}** — đợi server sync ~{cooldown_s}s "
-                 f"trước khi nhập code tại [trang chủ quy đổi VNG]({C.URL_VN})")
+    lines = ["**🔔 Phát hiện code mới (YouTube)**",
+             f"[{title}]({vurl})" if vurl else title,
+             f"Mã `{code}` — phát hiện qua **{src_label}** — đợi server sync ~{cooldown_s}s "
+             f"trước khi nhập code tại [trang chủ quy đổi VNG]({C.URL_VN})"]
     if via == "OCR":
         if not entry.get("redeem", True):
             lines.append("⛔ OCR = **alert**: bot CHỈ báo, không tự nhập.")
@@ -143,18 +151,11 @@ def msg_yt_alert(entry, cooldown_s):
         raw = (entry.get("ocr_text") or "").strip()
         if raw:
             lines.append(f"📝 Text OCR thô: `{raw[:240]}`")
-    foot = f'Code "{code}" đã được phát hiện lúc {_vn_hhmm()} (giờ VN)'
-
-    # Section 1 accessory = avatar kenh; Section 2 accessory = thumbnail video.
-    # Hai thumbnail type 11 -> ca hai anh deu render (day la ly do chuyen V2).
-    children = [_section(lines, avatar or None)]
-    children.append(_section([foot], thumb or None))
-    return _wrap(children, C_ALERT)
+    lines.append(f'— Code `{code}` phát hiện lúc {_vn_hhmm()} (giờ VN)')
+    return _container(lines, C_ALERT, image_urls=[avatar, thumb])
 
 
 def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, avatar=""):
-    """PING khi OCR be tac. Mention <@id> nam trong TextDisplay dau + allowed_mentions
-       mo dung 1 user -> ping that; section 1 accessory = avatar, section 2 = thumbnail."""
     uid = (getattr(C, "OCR_PING_USER", "") or "1160199218313564210").strip()
     av  = (avatar or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
     lines = [f"<@{uid}>"] if uid else []
@@ -168,8 +169,5 @@ def msg_ocr_fail(video_url, title, thumb_url, tried, note, n_recipe=0, tries=0, 
         lines.append(note)
     lines.append(f"👉 Mở ảnh thumbnail, đọc mã bằng mắt rồi nhập tay tại "
                  f"[trang quy đổi VNG]({C.URL_VN}).")
-    foot = f"Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử"
-
-    children = [_section(lines, av or None)]
-    children.append(_section([foot], thumb_url or None))
-    return _wrap(children, C_FAILURE, mention_uid=uid or None)
+    lines.append(f"— Lúc {_vn_hhmm()} (giờ VN) · OCR đã chạy {n_recipe} biến thể / {tries} lượt thử")
+    return _container(lines, C_FAILURE, image_urls=[av, thumb_url], mention_uid=uid or None)
