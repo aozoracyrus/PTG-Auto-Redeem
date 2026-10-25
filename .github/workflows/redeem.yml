@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN
+name: PTG Auto Redeem VN (API-first + YouTube + OCR Gemini/EasyOCR)
 
 on:
   workflow_dispatch: {}
@@ -28,8 +28,12 @@ jobs:
       DRY_RUN:          "0"
       TEST_CODE:        ""
       OCR_MODE:         "auto"
+      # auto = Gemini (neu co GEMINI_API_KEY) > EasyOCR > Tesseract. Ep bang "gemini"/"easy"/"tess".
       OCR_ENGINE:       "auto"
-      OCR_MAX_IMAGES:   "3"
+      GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}   # lay mien phi tai Google AI Studio
+      GEMINI_MODEL:     "gemini-2.5-flash"
+      GEMINI_TIMEOUT:   "45"
+      OCR_MAX_IMAGES:   "8"     # TAM test; ve 3 sau khi thay Gemini doc DUNG ma trong anh
       OCR_MAX_TRIES:    "50"
       OCR_LOOP_BUDGET:  "180"
       OCR_ALERT_CAP:    "6"
@@ -46,7 +50,9 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
-      - name: Install torch CPU
+      # Torch CPU chi de phuc vu EasyOCR/Tesseract FALLBACK offline. Gemini (uu tien) la
+      # API remote -> khong can torch; nhung giu fallback de khi het key/quota van chay.
+      - name: Install torch (CPU only, cho fallback)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install deps
@@ -54,41 +60,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Cache EasyOCR
+      - name: Cache EasyOCR models (fallback)
         uses: actions/cache@v4
         with:
           path: ~/.EasyOCR
           key: easyocr-en-v1
+          restore-keys: easyocr-
 
-      - name: Install tesseract (fallback)
+      - name: Install tesseract (fallback, best-effort)
         continue-on-error: true
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
 
-      - name: Cache camoufox
+      - name: Cache camoufox data
         uses: actions/cache@v4
         with:
           path: ~/.local/share/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: camoufox-${{ runner.os }}-
-
-      - name: Install playwright deps
+      - name: Install playwright firefox deps
         run: python -m playwright install-deps firefox || true
-
-      - name: Fetch camoufox
+      - name: Fetch camoufox engine
         run: python -m camoufox fetch
 
-      - name: Run loop
+      - name: Run loop (API redeem + YouTube + OCR Gemini/EasyOCR)
         id: run
         run: python src/main.py
 
-      - name: Trigger next run
+      - name: Trigger next run (self-chain 24/7)
         if: success()
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
+          echo ">> da self-trigger run tiep theo (ref=${GITHUB_REF_NAME:-main})"
 
-      - name: Upload screenshots
+      - name: Upload screenshots on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
