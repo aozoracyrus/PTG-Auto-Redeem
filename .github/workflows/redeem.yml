@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN (API-first + YouTube + OCR tự sửa)
+name: PTG Auto Redeem VN
 
 on:
   workflow_dispatch: {}
@@ -24,10 +24,11 @@ jobs:
       YT_COOLDOWN:      "60"
       YT_MAX_PROBE:     "5"
       USE_API:          "1"
-      YT_VERBOSE:       "1"      # dang test OCR nen bat; ve "0" khi chay that de log khong phinh
+      YT_VERBOSE:       "0"
       DRY_RUN:          "0"
       TEST_CODE:        ""
       OCR_MODE:         "auto"
+      OCR_ENGINE:       "auto"
       OCR_MAX_IMAGES:   "3"
       OCR_MAX_TRIES:    "50"
       OCR_LOOP_BUDGET:  "180"
@@ -45,39 +46,49 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
-      - name: Install python deps
+      - name: Install torch CPU
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install tesseract OCR (best-effort)
+      - name: Cache EasyOCR
+        uses: actions/cache@v4
+        with:
+          path: ~/.EasyOCR
+          key: easyocr-en-v1
+
+      - name: Install tesseract (fallback)
         continue-on-error: true
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
 
-      - name: Cache camoufox data
+      - name: Cache camoufox
         uses: actions/cache@v4
         with:
           path: ~/.local/share/camoufox
           key: camoufox-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
           restore-keys: camoufox-${{ runner.os }}-
-      - name: Install playwright firefox deps
+
+      - name: Install playwright deps
         run: python -m playwright install-deps firefox || true
-      - name: Fetch camoufox engine
+
+      - name: Fetch camoufox
         run: python -m camoufox fetch
 
-      - name: Run loop (API redeem + YouTube + OCR tự sửa)
+      - name: Run loop
         id: run
         run: python src/main.py
 
-      - name: Trigger next run (self-chain 24/7)
+      - name: Trigger next run
         if: success()
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
-          echo ">> da self-trigger run tiep theo (ref=${GITHUB_REF_NAME:-main})"
 
-      - name: Upload screenshots on failure
+      - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
