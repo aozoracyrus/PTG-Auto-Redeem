@@ -1,6 +1,13 @@
 # VONG LAP CHINH. API-first. Luong: web-list (rong) -> YouTube (entries + bare) ->
-# queue+cooldown ma text -> redeem -> OCR (auto/alert, co dedupe cross-tang) -> webhook
-# (Components V2 thuan tuy) -> commit state/queue/ocr_memory.
+# queue+cooldown ma text -> redeem -> OCR (auto/alert, co dedupe cross-tang + budget-per-loop)
+# -> webhook (Components V2 thuan tuy) -> commit state/queue/ocr_memory.
+#
+# HAI DIEM DOI SO BAN CU (sua loi A + B):
+#   (A) YT_COOLDOWN lay tu config.C (truoc day dinh nghia o day -> ocr.py goi C.YT_COOLDOWN
+#       bi AttributeError -> crash giua _alert -> candidate doc duong bi bo, khong nhap).
+#       Nay config.py chua YT_COOLDOWN; main.py tham chieu ve do -> het "dinh nghia 2 noi".
+#   (B) ocr.reset_gemini_budget() goi DAU MOI VONG LAP -> tran Gemini la per-LOOP (khong con
+#       per-process tich luy qua ~345 vong gay dead_key oan -> EasyOCR lanh -> doc sai pill).
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,7 +28,8 @@ REFRESH      = int(os.getenv("REFRESH_INTERVAL", "60"))
 MAXRUN       = int(os.getenv("MAX_RUNTIME", "20700"))
 MIN_UPTIME   = int(os.getenv("MIN_UPTIME", "120"))
 DMIN, DMAX   = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", "30000"))
-YT_COOLDOWN  = int(os.getenv("YT_COOLDOWN", "60"))
+# SUA LOI A: lay tu config (co san YT_COOLDOWN o do), KHONG dinh nghia local nua.
+YT_COOLDOWN  = C.YT_COOLDOWN
 YT_MAX_PROBE = int(os.getenv("YT_MAX_PROBE", "5"))
 USE_API      = os.getenv("USE_API", "1") == "1"
 DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"
@@ -106,6 +114,9 @@ def main():
         while time.time() - start < MAXRUN:
             try:
                 now = time.time()
+                # SUA LOI B: reset tran Gemini dau moi vong lap -> het tran o vong truoc
+                # khong con lam gemini "chet ca run"; video pending se duoc xet lai vong sau.
+                ocr.reset_gemini_budget()
                 codes_web = fetch_available_codes(session)
                 web_set = set(codes_web)
                 users = load_users()
