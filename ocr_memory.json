@@ -442,5 +442,23 @@
 "gemini_done": true,
 "pending_since": null,
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"2LG9kQjr7DA": {
+"video_id": "2LG9kQjr7DA",
+"thumb": "https://i.ytimg.com/vi/2LG9kQjr7DA/hq720.jpg?sqp=-oaymwE2CNAFEJQDSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhFIFcocjAP&rs=AOn4CLD-vxzkRSVyRWYbvk39KlE-clgzSg&usqp=CBQ",
+"title": "PLAY TOGETHER VNG | \"BẠN SẼ CHỌN AI NÀO?\" ~ TRANG PHỤC MỚI TWIN CHECKMATE",
+"video_url": "https://www.youtube.com/watch?v=2LG9kQjr7DA",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY VNG TOGETHER MỚI TRANG PHỤC TWIN CHECKMATE",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.8-flash",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
