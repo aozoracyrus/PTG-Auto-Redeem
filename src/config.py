@@ -1,4 +1,4 @@
-# TOAN BO CAU HINH. Comment = tieng Viet khong dau; chuoi hien thi cho nguoi = co dau.
+# TOAN BO CAU HINH. Comment = tieng Viet co dau; phan MAY DOC = ASCII nguyen van.
 import os, re
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
@@ -14,8 +14,18 @@ API_PAYLOAD_TEMPLATE = {
     "roleName": "{id}",
     "code":     "{code}",
 }
+
+# ================= TABLE MA SO JSON (LANGUAGE-PROOF) =================
 NUM_SUCCESS    = {1}
-NUM_USAGE      = {2117}
+
+# 2117/2121: ID nay DA REDEEM CODE NAY ROI, hoac cham gioi han 1/1 cho cap code|id.
+#   - KHONG phai ma sai.
+#   - KHONG blacklist code.
+#   - CHI dong cap code|id trong state, khong spam that bai do.
+# Bang chung runtime: thu PTWITHYAMINORA 2 lan cho cung 1 ID -> lan 2 tra 2121.
+NUM_ALREADY    = {2117, 2121}
+NUM_USAGE      = {2117, 2121}  # backward compat, van dung nhu already
+
 NUM_CODE_BAD   = {2106, 2102}
 NUM_ID_ERROR   = {2105}
 NUM_NEED_LOGIN = {2101}
@@ -38,8 +48,16 @@ SRV_OPT_RE = re.compile(r"Server\s*2|Máy chủ\s*2", re.I)
 TRANSIENT       = ["đã có lỗi xảy ra", "thử lại sau ít phút", "không tìm thấy dữ liệu yêu cầu",
                    "không thể tải thông tin game", "vui lòng thử lại sau"]
 NEED_LOGIN      = ["chưa liên kết tài khoản game", "liên kết tài khoản rồi thử lại"]
+
+# 2117/2121 thuong di kem chuoi nay. Van de bi coi la ALREADY, khong phai FAIL.
+FAIL_ALREADY    = ["đã redeem", "đã nhận", "vượt quá số lần nhập", "hết lượt nhập",
+                   "usage limit", "active code: user code management quantity exhausted",
+                   "quantity exhausted", "already redeemed", "already claimed"]
+
+# Giu lai de tuong thich nguc, nhung api_redeemer se uu tien FAIL_ALREADY truoc.
 FAIL_USAGE      = ["hết lượt nhập", "đã đạt đến giới hạn sử dụng", "giới hạn sử dụng",
                    "vượt quá số lần nhập", "usage limit", "active code"]
+
 FAIL_NOTEXIST   = ["nhận quà không thành công", "kiểm tra lại mã", "inbox fanpage",
                    "không tồn tại", "vui lòng kiểm tra lại", "code not found"]
 FAIL_IDERROR    = ["không tìm thấy nhân vật", "nhân vật đang offline", "nhập lại id"]
@@ -71,16 +89,15 @@ YT_CHANNEL_NAME   = "Play Together VNG"
 YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
-# Overlay badge trong UI card InnerTube -> KHONG phai title that. _looks_title bo sung
-#   chuoi nay; _best_title gom candidates va cat duration suffix truoc khi so do dai.
+# Overlay badge trong UI card InnerTube -> KHONG phai title that.
 BANNED_TITLE_OVERLAYS = {"đang phát", "phát trực tiếp", "live", "xem tiếp", "mới", "hot"}
 
 # Thu tu xu ly ung vien OCR: newest-first = dao nguoc list bare de video giftcode-moi
-#   lot vao slot OCR thay vi bi trailer/live-cu chim het (sua "giu pending hieu nhieu").
+#   lot vao slot OCR thay vi bi trailer/live-cu chim het.
 BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
 
-# Khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed (schema co dinh). De 0 =
-#   tat hoan toan, chi dung title da parse; van rong -> webhook in "[Xem video](url)" thuan.
+# Khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed (schema co dinh).
+# De 0 = tat hoan toan, chi dung title da parse; van rong -> webhook in "[Xem video](url)".
 OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 
 # ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
@@ -94,18 +111,12 @@ CODE_MIN_LEN  = 6
 #   va chi giu ten NAM TRONG list -> ten khong co bi BO + log (khong doan mu, khong 404 lap).
 #   GEMINI_MODEL (neu dat) duoc PREPEND de ghi de tam. Doi thu tu/them ten = sua env, khong code.
 # TRAN GOI: GEMINI_MAX_CALLS = tran MỖI VÒNG LẶP (reset_gemini_budget() goi tu main.py dau
-#   moi vong). Truoc day tich luy per-process -> dead_key ca run -> EasyOCR lanh -> doc sai
-#   pill. Nay het tran = PENDING MEM (video chua xet giu cho vong sau), KHONG dead_key.
-#   dead_key chi do 402/403/429. KHONG CON soft-cap (_GEMINI_OK_COUNT per-run tung lam Gemini
-#   tu giet minh sau 10 video dau -> da xoa het; quy tac: bien dem rate-limit phai reset cung
-#   chu ky voi ngan sach no bao ve).
+#   moi vong). Het tran = PENDING MEM, KHONG dead_key. dead_key chi do 402/403/429.
 # NHIEP 5xx: CA chuoi 5xx -> "local tham do" (chi duong tinh, am tinh = pending) + cho
 #   GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai. 5xx KHONG tinh tien (pricing: chi 200 moi
 #   tinh) -> chi la chong spam, khong phai chong phi.
 # LOCAL_WHEN: "fallback-only" (MAC DINH) = EasyOCR/Tesseract CHI chay khi Gemini THAT SU
-#   khong dung duoc (busy_all/budget/dead_key/no-model/no-key). Mot lan Gemini loi mang
-#   ("net") KHONG kich hoat local -> video do pending cho vong sau retry Gemini. "probe" =
-#   giu hanh vi cu (local tham do ca khi net).
+#   khong dung duoc. Mot lan Gemini loi mang ("net") KHONG kich hoat local.
 # OCR_ENGINE: auto = chuoi gemini (neu key co + co it nhat 1 ten trong list) > easy > tess.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
@@ -121,8 +132,7 @@ GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
 GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))            # tran/goi-per-LOOP
 GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))
 GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))
-# PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong. Gate fail
-#   (live/trailer/khong chu CODE) KHONG tinh vao day -> 3 slot dun cho video ma-trong-anh.
+# PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong.
 OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "3"))
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
