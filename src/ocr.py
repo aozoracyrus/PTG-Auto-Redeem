@@ -1,28 +1,13 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
-# TAT CA FIX HOP NHAT (xem comment config.py de biet ly do tung cai):
-#   (A) C.YT_COOLDOWN ton tai trong config.py -> _alert khong con crash -> candidate duoc nhap.
-#   (B) GEMINI_MAX_CALLS = per-LOOP (reset_gemini_budget() tu main.py) -> het tran = pending
-#       mem, KHONG dead_key ca run. dead_key chi do 402/403/429.
-#   (C) LOCAL_WHEN=fallback-only: mot lan Gemini loi mang ("net") -> LUON pending, KHONG
-#       kich hoat EasyOCR (tranh no_keyword/exhausted OAN cho pill cach dieu). Local chi
-#       chay khi Gemini THAT SU khong dung duoc. _ensure_candidate khi gemini_done=True
-#       KHONG bao gio dot RECIPES (chong "local lan chiem Gemini dang song").
-#   (D) DA XOAI soft-cap _GEMINI_OK_COUNT per-run (tung lam Gemini tu giet minh sau 10 video).
-#   (E) TITLE: _resolve_title 3 buoc (title co san -> oEmbed neu OCR_USE_OEMBED -> '');
-#       _gemini_call ghi rec['gemini_model'] khi 200 -> _engine_label(rec) in slug THAT,
-#       _engine_display(rec) in ten dep ("Gemini 3.5 Flash Lite"). Title rong -> webhook
-#       in "[Xem video](url)" thuan, khong bia nhan "Ma <code>" (nguyen nhan "Them vao
-#       danh sach cho???").
-#   (F) GC: _gc_expired_pending xoa video pending qua OCR_ALERT_TTL -> giai slot.
-# _gate tra 3 trang thai "pass"/"fail"/"pending"; _ensure_candidate tra (cand, finalize).
-# 2106 -> blacklist tried[] + candidate ke tiep; 2117 = ma DUNG het luot -> dung sua.
+# 2117/2121 trong _try_code duoc xu ly la ALREADY: dong cap code|id, khong blacklist code,
+# khong spam that bai do. Candidate chi bi blacklist khi that su not_exist (2106/2102).
 import os, io, time, json, base64, requests
 from collections import Counter
 from . import config as C
 from .parsers import code_from_ocr_text
 from .utils import log_yt, log_warn, log_hook, sleep, rand_ms
 from .state import commit_paths
-from .webhook import send, msg_success, msg_failure, msg_yt_alert, msg_ocr_fail
+from .webhook import send, msg_success, msg_failure, msg_yt_alert, msg_ocr_fail, msg_already
 from .api_redeemer import redeem_via_api
 
 DMIN = int(os.getenv("DELAY_MIN", "15000"))
@@ -44,7 +29,7 @@ _GEMINI_5XX = set()
 _GEMINI_DEAD_MODEL = set()
 _GEMINI_DEAD_KEY = False
 _GEMINI_DEGRADED_UNTIL = 0.0
-# --- ngan sach per-LOOP (sua loi B). KHONG con _GEMINI_OK_COUNT (sua loi D: bo soft-cap). ---
+# --- ngan sach per-LOOP ---
 _GEMINI_LOOP_BUDGET = 0
 _GEMINI_LOOP_EXHAUSTED = False
 
@@ -68,14 +53,12 @@ _GEMINI_PROMPT = (
 )
 
 
-# ================= Reset budget per-loop (goi tu main.py dau moi vong) =================
 def reset_gemini_budget():
     global _GEMINI_LOOP_BUDGET, _GEMINI_LOOP_EXHAUSTED
     _GEMINI_LOOP_BUDGET = C.GEMINI_MAX_CALLS
     _GEMINI_LOOP_EXHAUSTED = False
 
 
-# ================= Lay list model + dung chuoi uu tien =================
 def _gemini_load_models():
     global _GEMINI_LIST, _GEMINI_LIST_OK
     if _GEMINI_LIST is not None:
@@ -153,8 +136,6 @@ def _gemini_busy_window_active():
 
 
 def _current_gemini_model():
-    """Tra (model|None, status). status: 'ok'|'busy_all'|'budget'|'dead_key'|'no_model'|'no_key'.
-       KHONG CON 'soft_cap' (sua loi D). Budget per-loop la tran duy nhat chong runaway."""
     global _GEMINI_DEGRADED_UNTIL
     if not C.GEMINI_API_KEY:
         return None, "no_key"
@@ -179,12 +160,7 @@ def _current_gemini_model():
     return None, "dead_key"
 
 
-# ================= Goi gemini + QUAY CHUOI khi 5xx + phan loai loi =================
 def _gemini_call(png_bytes, rec):
-    """Thu lan luot model trong chuoi den khi 200. Khi 200 -> rec['gemini_model']=model (de
-       _engine_label/_engine_display in dung slug THAT da doc, khong con 'gemini:chain').
-       Budget decrement MOI lan goi (ke ca 5xx/404) vi no la luoi chong SPAM request, khong
-       phai chong tien (pricing: chi 200 moi tinh). Tra (texts|None, status)."""
     global _GEMINI_LOOP_BUDGET, _GEMINI_DEAD_KEY
     while True:
         model, status = _current_gemini_model()
@@ -216,7 +192,7 @@ def _gemini_call(png_bytes, rec):
                 return None, "net"
             parts = (cands[0].get("content") or {}).get("parts") or []
             txt = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
-            rec["gemini_model"] = model                 # <-- model THANG, gan vao video
+            rec["gemini_model"] = model
             sleep(C.GEMINI_THROTTLE_SEC)
             return ([txt] if txt else []), "ok"
         if sc in (500, 502, 503, 504):
@@ -261,7 +237,7 @@ def _gemini_pass(rec):
         return
     texts, status = _gemini_call(png, rec)
     if status != "ok" or texts is None:
-        return                                # busy/dead/budget/net -> gemini_done van False
+        return
     rec["gemini_done"] = True
     for txt in texts:
         if txt.strip():
@@ -270,7 +246,6 @@ def _gemini_pass(rec):
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
 
 
-# ================= Engine local (EasyOCR > Tesseract) =================
 def _easy_reader():
     global _READER, _READER_FAILED
     if _READER is not None:
@@ -395,12 +370,9 @@ def _kw_present(rec):
     return bool(C.YT_KEYWORD_RE.search((rec.get("raw") or "").upper()))
 
 
-# ================= Diem tap trung quyet dinh local (sua loi C) =================
 def _local_decide(rec, authoritative):
-    """fallback-only va khong-authoritative -> KHONG dot recipe, tra pending ngay (ngan spam).
-       Chi khi authoritative (Gemini chet hang loat) moi chay recipe va ket luan am/duong."""
     if not authoritative and C.LOCAL_WHEN != "probe":
-        return "pending"                       # Gemini busy/budget -> cho vong sau, khong local
+        return "pending"
     for i in range(_GATE_RECIPES):
         if i not in rec["recipes_used"]:
             _run_recipe_local(rec, i)
@@ -409,14 +381,7 @@ def _local_decide(rec, authoritative):
     return "fail" if authoritative else "pending"
 
 
-# ================= _gate 3 trang thai (sua loi C + D: khong con soft_cap) =================
 def _gate(rec):
-    """Tra "pass"/"fail"/"pending". NGUYEN TAC:
-       - Gemini ok & gemini_done -> quyet by no (auth tuyet doi).
-       - Gemini ok NHUNG khong done:
-           * st2 == "net" (1 lan loi mang/safety) -> LUON pending, KHONG bao gio local.
-           * st2 in (busy_all,budget,dead_key,no_model,no_key) -> local theo LOCAL_WHEN.
-       - Gemini khong ok tu dau (status != ok): status=="net" -> pending; con lai -> local."""
     _gemini_build_chain()
     model, status = _current_gemini_model()
     if status == "ok":
@@ -424,7 +389,7 @@ def _gate(rec):
         if rec.get("gemini_done"):
             return "pass" if _kw_present(rec) else "fail"
         _, st2 = _current_gemini_model()
-        if st2 == "net":                       # <-- SUA LOI C: cho vong sau retry Gemini
+        if st2 == "net":
             return "pending"
         return _local_decide(rec, authoritative=(st2 in ("dead_key", "no_model", "no_key")))
     if status == "net":
@@ -440,12 +405,9 @@ def _pick(rec):
 
 
 def _ensure_candidate(rec, authoritative):
-    """Tra (cand|None, finalize). SUA LOI C lan-chiem: khi gemini_done True (Gemini dang/hanh
-       viec), KHONG bao gio dot RECIPES. Het candidate = pending cho vong sau."""
-    if rec.get("gemini_done"):                 # Gemini quyet -> lay tu reads cua no, het la het
+    if rec.get("gemini_done"):
         cand = _pick(rec)
         return cand, (True if cand is not None else False)
-    # Duoc den day chi khi _gate da ket luan local-duoc-phep (authoritative hoac probe-busy).
     while True:
         cand = _pick(rec)
         if cand is not None:
@@ -456,16 +418,12 @@ def _ensure_candidate(rec, authoritative):
 
 
 def _pretty_model(slug):
-    """'gemini-3.5-flash-lite' -> 'Gemini 3.5 Flash Lite'. Khong match slug -> tra nguyen."""
     if not slug:
         return ""
     return " ".join(p.capitalize() for p in slug.split("-") if p)
 
 
 def _engine_label(rec=None):
-    """Slug THAT neu video da duoc model nao doc (rec['gemini_model']); khong thi fallback
-       theo trang thai chuoi. Log workflow co the van in 'gemini:chain' o dong gate (chua
-       co model thang); EMBED Discord se in slug that qua _engine_display(rec)."""
     if rec is not None:
         m = (rec.get("gemini_model") or "").strip()
         if m:
@@ -483,8 +441,6 @@ def _engine_label(rec=None):
 
 
 def _engine_display(rec=None):
-    """Nhan dep cho nguoi doc: 'Gemini 3.5 Flash Lite' khi da biet model thang;
-       'Gemini' khi chuoi gemini song nhung chua co slug; 'EasyOCR' khi local."""
     if rec is not None:
         m = (rec.get("gemini_model") or "").strip()
         if m:
@@ -496,19 +452,15 @@ def _engine_display(rec=None):
 
 
 def _resolve_title(entry):
-    """Title that, 3 buoc uu tien (KHONG phu thuoc oEmbed khi da co title):
-       (1) entry['title'] non-empty & khong banned -> dung ngay (khong goi mang).
-       (2) neu OCR_USE_OEMBED=True va (1) fail -> goi oEmbed (schema co dinh).
-       (3) van rong -> tra '' de msg_yt_alert in '[Xem video](url)' thuan tuy (khong bia nhan)."""
     t = (entry.get("title") or "").strip()
     if t and len(t) >= 12 and t.lower() not in C.BANNED_TITLE_OVERLAYS:
-        return t                              # BUOC 1: co san -> khong can oEmbed
+        return t
     if not getattr(C, "OCR_USE_OEMBED", True):
-        return ""                             # BUOC 3: tat oEmbed -> tra rong (link thuan)
+        return ""
     vid = (entry.get("video_id") or "").strip()
     if not vid:
         return ""
-    try:                                      # BUOC 2: chi khi that su can
+    try:
         r = requests.get("https://www.youtube.com/oembed",
                          params={"url": f"https://www.youtube.com/watch?v={vid}",
                                  "format": "json"}, timeout=8)
@@ -540,11 +492,16 @@ def _try_code(code, users, state):
     committed = 0
     for u in pending:
         r = redeem_via_api(code, u["id"])
-        st = r["status"]
+        st = r.get("status")
         key = f"{code}|{u['id']}"
         if st == "success":
             ok = True
             send(msg_success(code, u["id"]))
+            state.add(key)
+            committed += 1
+        elif st == "already":
+            # 2117/2121: da co code nay roi cho ID nay. Dong cap, khong blacklist code.
+            send(msg_already(code, u["id"], r.get("reason", "")))
             state.add(key)
             committed += 1
         elif st == "failure":
@@ -568,19 +525,18 @@ def _alert(rec, code, note, redeem_flag):
     rec["alerts"] += 1
     entry = {
         "code": code,
-        "title": _resolve_title(rec),                      # <-- title that, khong con banned/rong
+        "title": _resolve_title(rec),
         "video_url": rec["video_url"], "thumb_url": rec["thumb"],
         "channel_avatar": rec.get("channel_avatar", ""),
         "via": "OCR", "redeem": redeem_flag,
-        "engine_display": _engine_display(rec),            # <-- "Gemini 3.5 Flash Lite"
+        "engine_display": _engine_display(rec),
         "ocr_text": rec["raw"], "ocr_note": note,
     }
-    # Bỏ "conf": webhook.msg_yt_alert se khong in dong Do tin OCR nua.
-    send(msg_yt_alert(entry, C.YT_COOLDOWN))               # C.YT_COOLDOWN gio TON TAI (loi A het)
+    send(msg_yt_alert(entry, C.YT_COOLDOWN))
 
 
 def _rec_untouched(rec):
-    return (not rec.get("reads")) and (not rec["recipes_used"]) and (not rec.get("tries"))
+    return (not rec.get("reads")) and (not rec.get("recipes_used")) and (not rec.get("tries"))
 
 
 def _hold_pending(rec, now):
@@ -591,11 +547,7 @@ def _hold_pending(rec, now):
     return False
 
 
-# ================= GC BACKLOG (sua van de "giu pending hieu nhieu") =================
 def _gc_expired_pending(mem, now):
-    """Xoa video pending qua lau (>OCR_ALERT_TTL) de giai phong slot cho video moi.
-       Khong ping, khong commit state (vi chua biet ma), chi pop khoi mem. Bao ve: chi xoa
-       neu pending_since co that va qua TTL -> khong cho video moi bi xoa nham."""
     removed = 0
     for vid in list(mem.keys()):
         rec = mem.get(vid)
@@ -615,9 +567,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         return
     known = known_codes or set()
     mem = load_mem()
-    gc_removed = _gc_expired_pending(mem, now)   # don backlog truoc khi xu ly
+    gc_removed = _gc_expired_pending(mem, now)
     budget_end = time.monotonic() + C.OCR_LOOP_BUDGET
-    changed = bool(gc_removed)                    # neu GC xoa thi phai commit
+    changed = bool(gc_removed)
     deep_used = 0
     for v in bare_videos:
         rec = mem.setdefault(v["video_id"], _new_rec(v))
