@@ -2,11 +2,7 @@
 # queue+cooldown ma text -> redeem -> OCR (auto/alert, co dedupe cross-tang + budget-per-loop)
 # -> webhook (Components V2 thuan tuy) -> commit state/queue/ocr_memory.
 #
-# DIEM DOI SO BAN CU:
-#   (A) YT_COOLDOWN lay tu config.C (truoc day dinh nghia o day -> ocr.py goi C.YT_COOLDOWN
-#       bi AttributeError -> crash giua _alert -> candidate doc duong bi bo, khong nhap).
-#   (B) ocr.reset_gemini_budget() goi DAU MOI VONG LAP -> tran Gemini la per-LOOP (khong con
-#       per-process tich luy qua ~345 vong gay dead_key oan -> EasyOCR lanh -> doc sai pill).
+# 2117/2121 duoc xu ly la ALREADY: dong cap code|id, khong gui that bai do, khong blacklist code.
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,7 +15,7 @@ from src.redeemer import redeem_for_user
 from src.api_redeemer import redeem_via_api, preview_payload
 from src.users import load_users
 from src.state import load_state, commit_and_push_state
-from src.webhook import send, msg_success, msg_failure, msg_yt_alert, msg_status
+from src.webhook import send, msg_success, msg_failure, msg_yt_alert, msg_status, msg_already
 from src.youtube_watcher import get_yt_candidates
 from src import yt_queue as YQ
 
@@ -27,14 +23,15 @@ REFRESH      = int(os.getenv("REFRESH_INTERVAL", "60"))
 MAXRUN       = int(os.getenv("MAX_RUNTIME", "20700"))
 MIN_UPTIME   = int(os.getenv("MIN_UPTIME", "120"))
 DMIN, DMAX   = int(os.getenv("DELAY_MIN", "15000")), int(os.getenv("DELAY_MAX", "30000"))
-# SUA LOI A: lay tu config (co san YT_COOLDOWN o do), KHONG dinh nghia local nua.
 YT_COOLDOWN  = C.YT_COOLDOWN
 YT_MAX_PROBE = int(os.getenv("YT_MAX_PROBE", "5"))
 USE_API      = os.getenv("USE_API", "1") == "1"
 DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"
 TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()
 
-SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other"}
+# Cac kind that bai co the chot cap code|id de khong retry vo tan.
+# ALREADY khong nam o day vi no co status rieng "already".
+SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other", "need_login"}
 
 
 def is_code_fully_done(code, users, state):
@@ -57,7 +54,7 @@ def process_code(session, code, users, state, source):
             sleep(rand_ms(DMIN, DMAX))
             continue
         r = redeem_via_api(code, u["id"]) if USE_API else redeem_for_user(session, code, u["id"])
-        st = r["status"]
+        st = r.get("status")
         if st == "stuck":
             stuck = r.get("reason", "ket tam thoi")
             log_api(f"   stuck {u['id']} -> {stuck} (khong chot, khong webhook per-code)")
@@ -69,6 +66,10 @@ def process_code(session, code, users, state, source):
             continue
         if st == "success":
             send(msg_success(code, u["id"]))
+            state.add(f"{code}|{u['id']}")
+        elif st == "already":
+            # 2117/2121: ID nay da co code nay roi. Dong cap, khong coi la ma sai.
+            send(msg_already(code, u["id"], r.get("reason", "")))
             state.add(f"{code}|{u['id']}")
         else:
             kind = r.get("kind", "other")
@@ -113,8 +114,6 @@ def main():
         while time.time() - start < MAXRUN:
             try:
                 now = time.time()
-                # SUA LOI B: reset tran Gemini dau moi vong lap -> het tran o vong truoc
-                # khong con lam gemini "chet ca run"; video pending se duoc xet lai vong sau.
                 ocr.reset_gemini_budget()
                 codes_web = fetch_available_codes(session)
                 web_set = set(codes_web)
@@ -175,8 +174,6 @@ def main():
                             force_commit_yt_timeout(c, users, state)
                             queue.pop(c, None)
 
-                # ===== DEDUPE CROSS-TANG: tap ma tang text (title/desc) dang lo hoac da
-                # ===== nhap xong -> OCR phai bo qua, khong nhap lai, khong alert trung.
                 known_codes = set(queue.keys()) | {k.split("|", 1)[0] for k in state}
                 if C.OCR_MODE == "auto":
                     ocr.run_correction(users, state, bare, now, known_codes)
