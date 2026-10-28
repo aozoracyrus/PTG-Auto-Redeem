@@ -1,135 +1,228 @@
-import uuid, json, requests
+# API REDEEMER. Phan quang thang/thua = MA SO JSON, khong phu thuoc ngon ngu.
+# 2117/2121 -> status="already": ID nay DA REDEEM CODE NAY ROI (gioi han 1/1 cho code|id).
+#   KHONG phai ma sai, KHONG blacklist code, CHI dong cap code|id.
+import json, uuid, requests
 from . import config as C
 from .utils import log_api, log_warn
 
-_VAL_LOCK_AFTER = 6
-_val_streak = 0
-_payload_locked = False
+
+def _fill(node, code, uid):
+    if isinstance(node, dict):
+        return {k: _fill(v, code, uid) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_fill(x, code, uid) for x in node]
+    if isinstance(node, str):
+        return node.replace("{id}", str(uid)).replace("{code}", str(code))
+    return node
+
+
+def preview_payload(code, uid):
+    return _fill(C.API_PAYLOAD_TEMPLATE, code, uid)
 
 
 def _headers():
     return {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6",
-        "Content-Type": "application/json",
-        "Origin": "https://giftcode.vnggames.com",
-        "Referer": "https://giftcode.vnggames.com/",
         "User-Agent": C.API_UA,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6",
+        "Origin": "https://giftcode.vnggames.com",
+        "Referer": C.URL_VN,
         "X-Client-Region": "VN",
-        "X-Request-Id": str(uuid.uuid4()),
-        "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-site",
+        "X-Request-Id": uuid.uuid4().hex,
     }
 
 
-def _payload(code, uid):
-    out = {}
-    for k, v in C.API_PAYLOAD_TEMPLATE.items():
-        out[k] = v.format(code=code, id=uid, region="vn") if isinstance(v, str) else v
-    return out
-
-
-def _any(low, needles):
-    return any(str(n).lower() in low for n in needles)
-
-
-def _text_classify(low):
-    if _any(low, C.FAIL_USAGE):      return "usage_limit", "hết lượt nhập"
-    if _any(low, C.FAIL_NOTEXIST):   return "not_exist",   "không tồn tại / sai mã"
-    if _any(low, C.FAIL_IDERROR):    return "id_error",    "ID không tìm thấy/offline"
-    if _any(low, C.FAIL_VALIDATION): return "validation",  "thông tin không hợp lệ"
-    if _any(low, C.NEED_LOGIN):      return "need_login",  "chưa liên kết tài khoản"
-    if _any(low, C.TRANSIENT):       return "transient",   "lỗi hệ thống tạm thời"
-    return None, None
-
-
-def _num_of(j):
-    if not isinstance(j, dict):
-        return None
-    for k in ("errorCode", "code", "errcode", "err_code", "resultCode", "status"):
-        v = j.get(k)
-        if isinstance(v, int):
-            return v
+def _extract_error_code(node):
+    if isinstance(node, dict):
+        for k in ("errorCode", "error_code", "errCode", "statusCode"):
+            if k in node:
+                v = node[k]
+                try:
+                    return int(v)
+                except Exception:
+                    pass
+        for v in node.values():
+            ec = _extract_error_code(v)
+            if ec is not None:
+                return ec
+    elif isinstance(node, list):
+        for v in node:
+            ec = _extract_error_code(v)
+            if ec is not None:
+                return ec
     return None
 
 
-def preview_payload(code, uid):
-    return json.dumps(_payload(code, uid), ensure_ascii=False)
+def _extract_message(node):
+    if isinstance(node, dict):
+        for k in ("description", "message", "msg", "errorMessage", "error"):
+            if k in node:
+                v = node[k]
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+                if isinstance(v, (dict, list)):
+                    s = _extract_message(v)
+                    if s:
+                        return s
+        for v in node.values():
+            s = _extract_message(v)
+            if s:
+                return s
+    elif isinstance(node, list):
+        for v in node:
+            s = _extract_message(v)
+            if s:
+                return s
+    return ""
+
+
+def _contains_any(low, needles):
+    return any(str(n).lower() in low for n in needles)
+
+
+def _classify(http_status, body):
+    text = (_extract_message(body) or "").strip()
+    low = text.lower()
+    ec = _extract_error_code(body)
+
+    # HTTP layer first for transport stuck. 400 business error van co the co errorCode.
+    if http_status in C.HTTP_STUCK:
+        return {
+            "status": "stuck",
+            "reason": f"HTTP {http_status}: {text[:180] or 'transport stuck'}",
+            "numeric": ec,
+        }
+
+    # Numeric is authoritative.
+    if ec is not None:
+        if ec in C.NUM_SUCCESS:
+            return {"status": "success", "reason": text or "Thành công", "numeric": ec}
+
+        if ec in C.NUM_ALREADY:
+            return {
+                "status": "already",
+                "kind": "already_redeemed",
+                "reason": text or "Code đã được redeem trước đó cho ID này (2117/2121).",
+                "numeric": ec,
+            }
+
+        if ec in C.NUM_CODE_BAD:
+            return {
+                "status": "failure",
+                "kind": "not_exist",
+                "reason": text or "Mã không tồn tại hoặc sai.",
+                "numeric": ec,
+            }
+
+        if ec in C.NUM_ID_ERROR:
+            return {
+                "status": "failure",
+                "kind": "id_error",
+                "reason": text or "ID nhân vật lỗi/offline/khong tim thay.",
+                "numeric": ec,
+            }
+
+        if ec in C.NUM_NEED_LOGIN:
+            return {
+                "status": "failure",
+                "kind": "need_login",
+                "reason": text or "Cần liên kết tài khoản game.",
+                "numeric": ec,
+            }
+
+        if ec in C.NUM_TRANSIENT:
+            return {
+                "status": "retry",
+                "reason": text or f"Transient {ec}",
+                "numeric": ec,
+            }
+
+        if ec in C.NUM_VALIDATION:
+            return {
+                "status": "failure",
+                "kind": "validation",
+                "reason": text or f"Validation {ec}",
+                "numeric": ec,
+            }
+
+    # Text fallback, only if numeric absent or unknown.
+    if _contains_any(low, C.CAPTCHA_HINTS):
+        return {"status": "captcha", "reason": text or "Captcha"}
+
+    # ALREADY truoc NOT_EXIST vi 2121 co the chua chu "active code".
+    if _contains_any(low, C.FAIL_ALREADY) or _contains_any(low, C.FAIL_USAGE):
+        return {
+            "status": "already",
+            "kind": "already_redeemed",
+            "reason": text or "Code đã redeem trước đó / hết lượt cho ID này.",
+            "numeric": ec,
+        }
+
+    if _contains_any(low, C.FAIL_NOTEXIST):
+        return {
+            "status": "failure",
+            "kind": "not_exist",
+            "reason": text or "Mã không tồn tại hoặc sai.",
+            "numeric": ec,
+        }
+
+    if _contains_any(low, C.FAIL_IDERROR):
+        return {
+            "status": "failure",
+            "kind": "id_error",
+            "reason": text or "ID lỗi.",
+            "numeric": ec,
+        }
+
+    if _contains_any(low, C.NEED_LOGIN):
+        return {
+            "status": "failure",
+            "kind": "need_login",
+            "reason": text or "Cần liên kết tài khoản game.",
+            "numeric": ec,
+        }
+
+    if _contains_any(low, C.FAIL_VALIDATION):
+        return {
+            "status": "failure",
+            "kind": "validation",
+            "reason": text or "Dữ liệu không hợp lệ.",
+            "numeric": ec,
+        }
+
+    if _contains_any(low, C.TRANSIENT):
+        return {"status": "retry", "reason": text or "Transient", "numeric": ec}
+
+    # Unknown: khong chot that bai, de retry/queue timeout xu ly sau.
+    return {
+        "status": "unknown",
+        "reason": text or f"HTTP {http_status} unknown numeric={ec}",
+        "numeric": ec,
+    }
 
 
 def redeem_via_api(code, uid):
-    global _val_streak, _payload_locked
-    if _payload_locked:
-        return {"status": "stuck", "kind": "payload_locked",
-                "reason": "payload chưa xác nhận (1002 lặp)"}
+    payload = preview_payload(code, uid)
     try:
-        r = requests.post(C.API_URL, json=_payload(code, uid), headers=_headers(), timeout=20)
+        r = requests.post(C.API_URL, json=payload, headers=_headers(), timeout=20)
     except Exception as e:
-        log_api(f"Loi mang ({e.__class__.__name__}) -> stuck")
-        return {"status": "stuck", "kind": "network", "reason": f"mạng: {e.__class__.__name__}"}
+        log_warn("API redeem loi mang:", e.__class__.__name__)
+        return {"status": "retry", "reason": f"network {e.__class__.__name__}"}
 
-    raw = r.text or ""
-    low = raw.lower()
     try:
-        j = r.json()
+        body = r.json()
     except Exception:
-        j = None
-    num = _num_of(j)
-    msg = str((j or {}).get("message") or (j or {}).get("description") or (j or {}).get("msg") or (j or {}).get("error") or "") if isinstance(j, dict) else ""
-    mlow = (msg or raw).lower()
-    log_api(f"http={r.status_code} errorCode={num} msg={msg[:120]!r}")
+        body = {"raw": r.text}
 
-    if num != 1002:
-        _val_streak = 0
-        _payload_locked = False
+    res = _classify(r.status_code, body)
 
-    if _any(low, C.CAPTCHA_HINTS) or r.status_code == 429:
-        return {"status": "captcha"}
-
-    if num in C.NUM_SUCCESS:
-        k, _ = _text_classify(mlow)
-        if k in ("usage_limit", "not_exist", "id_error"):
-            return {"status": "failure", "kind": k, "reason": f"errorCode={num} nhưng message báo {k}"}
-        return {"status": "success"}
-    if num in C.NUM_VALIDATION:
-        _val_streak += 1
-        pl = preview_payload(code, uid)
-        log_api(f"PAYLOAD ({len(pl)} bytes): {pl}")
-        if _val_streak >= _VAL_LOCK_AFTER:
-            _payload_locked = True
-            log_warn(f"1002 lap {_val_streak} lan -> KHOA payload")
-            return {"status": "stuck", "kind": "payload_locked", "reason": "payload 1002 lặp"}
-        return {"status": "retry", "kind": "payload_suspect", "reason": "nghi payload sai (1002)"}
-    if num in C.NUM_USAGE:
-        return {"status": "failure", "kind": "usage_limit", "reason": "hết lượt (2117)"}
-    if num in C.NUM_CODE_BAD:
-        return {"status": "failure", "kind": "not_exist", "reason": "không tồn tại / sai mã (2106/2102)"}
-    if num in C.NUM_ID_ERROR:
-        return {"status": "failure", "kind": "id_error", "reason": "ID không tìm thấy/offline (2105)"}
-    if num in C.NUM_NEED_LOGIN:
-        return {"status": "retry", "kind": "need_login", "reason": "chưa liên kết tài khoản (2101)"}
-    if num in C.NUM_TRANSIENT:
-        return {"status": "stuck", "kind": "transient", "reason": f"lỗi tạm (errorCode={num})"}
-
-    if num is not None:
-        k, reason = _text_classify(mlow)
-        if k in ("usage_limit", "not_exist", "id_error", "validation"):
-            return {"status": "failure", "kind": k, "reason": reason}
-        if k == "transient":
-            return {"status": "stuck", "kind": "transient", "reason": reason}
-        if k == "need_login":
-            return {"status": "retry", "kind": "need_login", "reason": reason}
-        return {"status": "failure", "kind": "other", "reason": f"mã lỗi chưa map errorCode={num}"}
-
-    k, reason = _text_classify(mlow)
-    if k in ("usage_limit", "not_exist", "id_error", "validation"):
-        return {"status": "failure", "kind": k, "reason": reason}
-    if r.status_code in C.HTTP_STUCK:
-        return {"status": "stuck", "kind": "http_stuck", "reason": f"HTTP {r.status_code}"}
-    if r.ok:
-        if C.RATIO_FAIL in low:
-            return {"status": "failure", "kind": "other", "reason": "thất bại (0/1)"}
-        return {"status": "success"}
-    if C.RATIO_FAIL in low:
-        return {"status": "failure", "kind": "other", "reason": "thất bại (0/1)"}
-    log_api(f"Khong nhan dien duoc http={r.status_code} body[:300]={raw[:300]!r}")
-    return {"status": "stuck", "kind": "unknown", "reason": f"response chưa map (http={r.status_code})"}
+    # Log chi khi co van de de debug, khong log success spam.
+    if res.get("status") in ("failure", "stuck", "captcha", "retry", "unknown"):
+        log_api(
+            "API redeem non-success http", r.status_code,
+            "code", code, "id", uid,
+            "status", res.get("status"), "kind", res.get("kind"),
+            "numeric", res.get("numeric"), "body", (r.text or "")[:240],
+        )
+    return res
