@@ -5,8 +5,10 @@
 #   (3) Container(17) allowed children = TextDisplay/Separator/Section/MediaGallery/ActionRow/File;
 #       max 10 component/container (ta dung 3); TextDisplay content <=4000 ky tu; MediaGallery
 #       items <=10. accent_color = spine trai (chi bao mau chinh thuc).
-# KHONG con emoji vuong prefix (🟨//🟩/): accent_color da la chi bao mau.
-#Them msg_already cho 2117/2121: khong phai that bai do, chi la ID da redeem code nay roi.
+# KHONG con emoji vuong prefix: accent_color da la chi bao mau.
+# Title rong -> LINK THUAN '[Xem video](url)', khong bia 'Ma <code>'.
+# msg_already cho 2117/2121: khong phai loi, khong spam do.
+# src_label THEM "POST" = bai dang Community (tab /posts).
 import os, json, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
@@ -16,7 +18,7 @@ C_SUCCESS  = 0x2ECC71
 C_FAILURE  = 0xE74C3C
 C_ALERT    = 0xF1C40F
 C_STATUS   = 0xE67E22
-C_ALREADY  = 0x3498DB  # xanh nuoc: da co truoc do / khong can nhap lai
+C_ALREADY  = 0x3498DB
 _FLAG_V2   = 1 << 15
 
 try:
@@ -104,18 +106,14 @@ def send(payload):
         log_err("Loi khi gui webhook:", e)
 
 
-# ================= cac loai tin nhan =================
 def msg_success(code, uid):
     lines = ["**✅ Nhập thành công**", f'Code `{code}` đã nhập thành công cho ID `{uid}`']
     return _container(lines, C_SUCCESS)
 
 
 def msg_already(code, uid, reason=""):
-    """2117/2121: ID nay da redeem code nay roi. Khong phai loi, khong spam do."""
-    lines = [
-        "**ℹ️ Code đã redeem trước đó**",
-        f'Code `{code}` đã được nhận bởi ID `{uid}` — bot không nhập lại.',
-    ]
+    lines = ["**ℹ️ Code đã redeem trước đó**",
+             f'Code `{code}` đã được nhận bởi ID `{uid}` — bot không nhập lại.']
     if reason:
         lines.append(f'Lí do: "{reason}"')
     return _container(lines, C_ALREADY)
@@ -140,7 +138,8 @@ def msg_yt_alert(entry, cooldown_s):
     avatar = (entry.get("channel_avatar") or getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip()
     via    = entry.get("via", "TITLE")
     src_label = {"TITLE": "tiêu đề", "DESC": "mô tả video",
-                 "OCR": "ảnh thumbnail (OCR)"}.get(via, via)
+                 "OCR": "ảnh thumbnail (OCR)",
+                 "POST": "bài đăng (Community Post)"}.get(via, via)
 
     if title:
         head_line = f"[{title}]({vurl})" if vurl else title
