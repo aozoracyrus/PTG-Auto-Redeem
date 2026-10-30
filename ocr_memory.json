@@ -784,5 +784,23 @@
 "pending_since": null,
 "gemini_model": "gemini-3.6-flash",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"POSTIMG-Ugkx2qkBsc4CXeNOFdFrot5qrjk0aBmALm0k": {
+"video_id": "POSTIMG-Ugkx2qkBsc4CXeNOFdFrot5qrjk0aBmALm0k",
+"thumb": "https://yt3.ggpht.com/ymn1oN-1mfIIMZYM4NhdggLxMOU2bMFwTL44e6qwpPMUss-HwERMO3AjXwHTnRswbNFuVtGrnoy76g=s1080-c-fcrop64=1,0000199affffe666-rw-nd-v1",
+"title": "【LIVESTREAM】\"THẮNG HAY THUA?\" ĐOÁN ĐÚNG TRÚNG QUÀ PLAY",
+"video_url": "https://www.youtube.com/post/Ugkx2qkBsc4CXeNOFdFrot5qrjk0aBmALm0k",
+"recipes_used": [],
+"reads": {},
+"raw": " | THẮNG HAY THUA? ĐOÁN ĐÚNG TRÚNG QUÀ PLAY PLAY TOGETHER PLAY",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.5-flash-lite",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
