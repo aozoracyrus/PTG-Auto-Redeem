@@ -802,5 +802,25 @@
 "pending_since": null,
 "gemini_model": "gemini-3.5-flash-lite",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"POSTIMG-UgkxKW0i35hhzwjH5t6C9CCjYomf9DkqDu6U": {
+"video_id": "POSTIMG-UgkxKW0i35hhzwjH5t6C9CCjYomf9DkqDu6U",
+"thumb": "https://yt3.ggpht.com/-asE7DhzzzL-8wJxxTfUlkkZ7Cqux9tjqRuonLZTXegXIEP_FobpbtxnA_pbvMAc6px5GBz5JVgrRw=s1080-c-fcrop64=1,0000199affffe666-rw-nd-v1",
+"title": "【LIVESTREAM】ĐÊM HỘI HALLOWEEN, BẬT MÍ CODE LIVESTREAM",
+"video_url": "https://www.youtube.com/post/UgkxKW0i35hhzwjH5t6C9CCjYomf9DkqDu6U",
+"recipes_used": [],
+"reads": {
+"LIVESTREAM": 1
+},
+"raw": " | ĐÊM HỘI HALLOWEEN BẬT MÍ CODE LIVESTREAM",
+"tried": [],
+"tries": 1,
+"alerts": 1,
+"done": "committed",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.5-flash-lite",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
