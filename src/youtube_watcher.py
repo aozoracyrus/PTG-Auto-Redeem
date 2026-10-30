@@ -1,15 +1,13 @@
-# NGUON MA CHO VN = API (Data API v3 + InnerTube public fallback).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC); bare = video upload
-#   KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
-# SUA TITLE ("Dang phat???" / "Them vao danh sach cho???" / "(26 giay)"):
-#   _looks_title bo sung overlay badge (C.BANNED_TITLE_OVERLAYS); _strip_duration cat
-#   "(26 giay)"/"(1:23)" TRUOC khi so do dai; _best_title gom moi candidate roi chon cai
-#   DAI NHAT sau khi cat. KHONG doan cau truc card. Co dinh KHONG cat "gio/hour" de tranh
-#   an mat title su kien theo gio ("Cap nhat 8 gio").
-# SUA "giu pending hieu nhieu": sort bare theo C.BARE_ORDER (mac dinh newest-first = dao
-#   nguoc) de video giftcode-moi lot vao 3 slot OCR thay vi bi trailer/live-cu chim het.
-# Live KHONG can loc bang field (lan truoc skipped_live=0 vi doan liveStreamingDetails):
-#   OCR gate tu chan live im lang (anh live khong co chu CODE), va quota ap SAU gate (ocr.py).
+# NGUON MA CHO VN = API (Data API v3 + InnerTube videos) + COMMUNITY POSTS (tab /posts).
+# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC) + POST CO ma text;
+#   bare = video upload KHONG co ma text nhung CO thumbnail + POST CHI CO ANH ma text
+#   KHONG ra code = UNG VIEN OCR.
+# COMMUNITY POSTS (schema THAT, bang chung F12 backstagePostRenderer): 3 duong hedged
+#   (1) STRUCT _walk_posts doc dung postId/contentText/backstageImageRenderer -> entries
+#       (link thang /post/<postId> + anh post) hoac bare (anh post, text khong code).
+#   (2) FLAT regex 'MÃ CODE' tren HTML da giai \\uXXXX -> luoi entries text.
+#   (3) BROWSE FALLBACK INNERTUBE_PARAMS_POSTS (params THAT) khi document GET consent wall.
+# Dedupe video-truoc-post-sau: final = video_cut(3) + post_keep, post trung code video skip.
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt, code_from_desc_text
@@ -20,17 +18,23 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _HDR = {"User-Agent": UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.6"}
 _dumped_once = False
 _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
-_IMG_HOSTS = ("ytimg.com", "googleusercontent.com")
+_IMG_HOSTS = ("ytimg.com", "googleusercontent.com", "ggpht.com")
 _AV_TOKEN = re.compile(r"=s\d+-c\b")
 
-# Duration badge cua InnerTube (hl=vi) thuong dinv vao title traversal: "... 20/10 (26 giay)".
-# Chi strip giay/phut + dang "(MM:SS)"/"(H:MM:SS)" CO NGOAC (ngoac = hieu hieu badge, khong
-#   phai gio su kien). CO TINH bo "gio/hour" tran -> de strip nham title su kien theo gio.
+# Neo post: "MÃ CODE" / "MA CODE" (5 dau A + a/A) -> token ASCII >=6.
+# Cho pheo toi da 8 ky tu khong phai chu/sau (quote, backslash, space, dash...) de khop
+# ca dang escaped trong HTML JS sau khi giai \\uXXXX. Hau kiem prefix PT/min-len.
+_POST_CODE_RE = re.compile(
+    r"M[ÀÁẢÃẠaàáảãạ]\s*CODE\s*[:\-–]?\s*[^A-Za-z0-9]{0,8}([A-Za-z0-9]{6,})", re.I)
+
 _DUR_RE = re.compile(
     r"\s*(?:"
     r"\(?\d+(?:[:.]\d{1,2})?\s*(?:giây|giay|phút|phut|second|seconds|sec|minute|minutes|min)s?\)?"
     r"|\(\d{1,2}:\d{2}(?::\d{2})?\)"
     r")\s*$", re.I)
+
+_YTID_MARK = re.compile(r"var\s+ytInitialData\s*=\s*")
+_UESC = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 
 def _host(u):
@@ -41,6 +45,14 @@ def _host(u):
     return h.lower()
 
 
+def _abs_url(u):
+    """//yt3... -> https://yt3... ; khong doi gi neu da http(s)."""
+    u = (u or "").strip()
+    if u.startswith("//"):
+        return "https:" + u
+    return u
+
+
 def _is_img_host(u):
     h = _host(u)
     return any(h == d or h.endswith("." + d) for d in _IMG_HOSTS)
@@ -49,10 +61,12 @@ def _is_img_host(u):
 def _iter_images(node):
     if isinstance(node, dict):
         u = node.get("url")
-        if isinstance(u, str) and u.startswith("http") and _is_img_host(u):
-            w = node.get("width") if isinstance(node.get("width"), int) else 0
-            hh = node.get("height") if isinstance(node.get("height"), int) else 0
-            yield (w, hh, u)
+        if isinstance(u, str):
+            au = _abs_url(u)
+            if au.startswith("http") and _is_img_host(au):
+                w = node.get("width") if isinstance(node.get("width"), int) else 0
+                hh = node.get("height") if isinstance(node.get("height"), int) else 0
+                yield (w, hh, au)
         for v in node.values():
             yield from _iter_images(v)
     elif isinstance(node, list):
@@ -71,9 +85,21 @@ def _iter_strings(node):
         yield node
 
 
+def _find_nodes(node, key):
+    """Lay moi dict con co key = <key> (duy de quy). Dung cho backstagePostRenderer."""
+    if isinstance(node, dict):
+        if key in node and isinstance(node[key], dict):
+            yield node[key]
+        for v in node.values():
+            yield from _find_nodes(v, key)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _find_nodes(v, key)
+
+
 def _pick_thumb(node):
     imgs = list(_iter_images(node))
-    yt = [x for x in imgs if _host(x[2]).endswith("ytimg.com")]
+    yt = [x for x in imgs if _host(x[2]).endswith(("ytimg.com", "ggpht.com"))]
     if not yt:
         return ""
     return max(yt, key=lambda x: (x[0] * x[1], x[0], x[1]))[2]
@@ -112,8 +138,6 @@ def _strip_duration(s):
 
 
 def _looks_title(s):
-    """Title hop le? Loai overlay badge ('Dang phat'...). Khong doan cau truc card; chi
-       so chuoi vs C.BANNED_TITLE_OVERLAYS."""
     if not s or len(s) < 8:
         return False
     if s.lower().startswith("http") or s.replace(".", "").isdigit():
@@ -124,8 +148,6 @@ def _looks_title(s):
 
 
 def _best_title(cands):
-    """Chon title tot nhat: CAT duration suffix TRUOC khi do do dai (neu khong, '(26 giay)'
-       dem vao va co the bien badge thanh 'title dai nhat'). Loc chuoi <12 va khong alnum."""
     if not cands:
         return ""
     cleaned = [_strip_duration(s) for s in cands]
@@ -144,20 +166,20 @@ def _walk_cards(node, st):
             st["n"] += 1
             thumb = _pick_thumb(node)
             tcode = None
-            titles = []                      # GOM moi candidate thay vi dung dau tien
+            titles = []
             for s in _iter_strings(node):
                 if _looks_title(s):
                     titles.append(s)
                 cs = code_sau_keyword_yt(s)
                 if cs and tcode is None:
                     tcode = cs[0]
-            disp = _best_title(titles)       # chon cai dai nhat hop ly (sau khi cat duration)
+            disp = _best_title(titles)
             card = {"idx": idx, "video_id": vid, "thumb_url": thumb,
                     "video_url": f"https://www.youtube.com/watch?v={vid}",
                     "title": disp, "title_code": tcode}
             if tcode:
                 st["coded"].append(card)
-            elif thumb:                      # KHONG loc live o day; gate lo sau (ocr.py)
+            elif thumb:
                 st["bare"].append(card)
         for v in node.values():
             _walk_cards(v, st)
@@ -247,18 +269,210 @@ def _via_innertube():
     return entries, st["bare"], avatar
 
 
+# ================= COMMUNITY POSTS (schema THAT: backstagePostRenderer) =================
+def _post_text(post):
+    """Noi dung contentText.runs[].text (code nam o day, bang chung F12)."""
+    ct = post.get("contentText") or {}
+    runs = ct.get("runs") or []
+    return "".join(str(r.get("text", "")) for r in runs if isinstance(r, dict))
+
+
+def _post_image(post):
+    """Anh post tu backstageAttachment.backstageImageRenderer.image.thumbnails."""
+    att = post.get("backstageAttachment") or {}
+    bir = att.get("backstageImageRenderer") or {}
+    img = bir.get("image") or {}
+    thumbs = img.get("thumbnails") or []
+    best, bw = "", 0
+    for t in thumbs:
+        if not isinstance(t, dict):
+            continue
+        u = _abs_url(t.get("url", ""))
+        if not u.startswith("http"):
+            continue
+        w = t.get("width") if isinstance(t.get("width"), int) else 0
+        h = t.get("height") if isinstance(t.get("height"), int) else 0
+        if w * h > bw:
+            bw = w * h
+            best = u
+    return best
+
+
+def _post_code(text):
+    for m in _POST_CODE_RE.finditer(text or ""):
+        tok = m.group(1).upper()
+        if len(tok) >= C.CODE_MIN_LEN and tok.startswith(tuple(C.CODE_PREFIXES)):
+            return tok
+    return None
+
+
+def _post_title(text):
+    """Title = dong dau contentText (vd '🧟【CODE CHUNG HALLOWEEN】...'), fallback nhan."""
+    first = (text or "").split("\n", 1)[0].strip()
+    if _looks_title(first):
+        return first
+    return "Bài đăng Community (Play Together VNG)"
+
+
+def _walk_posts(j):
+    """Duyet backstagePostRenderer THAT -> (entries text-code, bare anh-post-text-khong-code).
+       entries: via=POST, video_url = link thang /post/<postId>, thumb_url = anh post.
+       bare: chi khi post CO anh nhung text KHONG ra code -> ung vien OCR."""
+    entries, bare = [], []
+    seen_code = set()
+    seen_pid = set()
+    n = 0
+    for post in _find_nodes(j, "backstagePostRenderer"):
+        pid = str(post.get("postId", "") or "").strip()
+        text = _post_text(post)
+        code = _post_code(text)
+        img = _post_image(post)
+        link = (C.YT_POST_LINK + pid) if pid else C.YT_CHANNEL_POSTS
+
+        if code:
+            if code in seen_code:
+                continue
+            seen_code.add(code)
+            entries.append({"code": code, "title": _post_title(text),
+                            "video_id": ("POST-" + pid) if pid else ("POST-" + code),
+                            "video_url": link, "thumb_url": img,
+                            "via": "POST", "redeem": True, "idx": 100000 + n})
+            n += 1
+        elif img:
+            if pid and pid in seen_pid:
+                continue
+            if pid:
+                seen_pid.add(pid)
+            vid = ("POSTIMG-" + pid) if pid else ("POSTIMG-" + str(n))
+            bare.append({"idx": 200000 + n, "video_id": vid, "thumb_url": img,
+                         "video_url": link, "title": _post_title(text)})
+            n += 1
+    return entries, bare
+
+
+def _codes_from_text(s):
+    """FLAT luoi: chay thang regex tren xấp text (da giai \\uXXXX)."""
+    out, seen = [], set()
+    for m in _POST_CODE_RE.finditer(s or ""):
+        tok = m.group(1).upper()
+        if len(tok) < C.CODE_MIN_LEN or not tok.startswith(tuple(C.CODE_PREFIXES)):
+            continue
+        if tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
+
+
+def _unescape_js(s):
+    return _UESC.sub(lambda m: chr(int(m.group(1), 16)), s or "")
+
+
+def _parse_posts_html(html):
+    """(1) STRUCT: tach ytInitialData -> _walk_posts. (2) FLAT: regex toan bo HTML.
+       Tra (entries, bare, diag)."""
+    entries, bare = [], []
+    struct_ok = False
+    m = _YTID_MARK.search(html or "")
+    if m:
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(html, m.end())
+            struct_ok = True
+            entries, bare = _walk_posts(obj)
+        except Exception:
+            struct_ok = False
+
+    seen = {e["code"] for e in entries}
+    for c in _codes_from_text(_unescape_js(html or "")):
+        if c not in seen:
+            seen.add(c)
+            entries.append({"code": c, "title": "Bài đăng Community (Play Together VNG)",
+                            "video_id": "POST-" + c, "video_url": C.YT_CHANNEL_POSTS,
+                            "thumb_url": "", "via": "POST", "redeem": True,
+                            "idx": 150000 + len(entries)})
+
+    diag = ""
+    if not entries and not bare:
+        diag = (f"struct={'CO' if struct_ok else 'KHONG'} ytInitialData; flat 0; "
+                f"head={repr((html or '')[:200])}")
+    return entries, bare, diag
+
+
+def _via_posts_browse():
+    """(3) FALLBACK: POST /browse voi INNERTUBE_PARAMS_POSTS (params THAT)."""
+    if not C.INNERTUBE_KEY:
+        return [], []
+    for prm in C.INNERTUBE_PARAMS_POSTS:
+        body = {"context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
+                                        "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
+                "browseId": C.YT_CHANNEL_ID, "params": prm}
+        try:
+            r = requests.post(C.INNERTUBE_BROWSE,
+                              params={"key": C.INNERTUBE_KEY, "prettyPrint": "false"},
+                              json=body, headers={**_HDR, "Content-Type": "application/json"},
+                              timeout=20)
+        except Exception as e:
+            log_yt("Posts browse loi mang (candidate", prm, "):", e.__class__.__name__)
+            continue
+        if r.status_code != 200:
+            log_yt("Posts browse http", r.status_code, "(candidate", prm, ") -> thu ke")
+            continue
+        try:
+            j = r.json()
+        except Exception:
+            log_yt("Posts browse khong phai JSON (candidate", prm, ") -> thu ke")
+            continue
+        ents, bars = _walk_posts(j)
+        if ents or bars:
+            log_yt(f"Posts browse: candidate {prm} -> {len(ents)} entries + {len(bars)} bare")
+            return ents, bars
+        log_yt("Posts browse candidate", prm, " -> 0 post -> thu ke")
+    log_warn("Posts: document GET fail VA browse (INNERTUBE_PARAMS_POSTS that) cung 0. "
+             "Mo F12 tab Posts -> copy 'params' day du vao env INNERTUBE_PARAMS_POSTS. "
+             "Video/OCR van chay.")
+    return [], []
+
+
+def _via_posts():
+    """Tra (entries, bare). Thu document GET (struct+flat) truoc; neu rong -> browse fallback."""
+    if not C.YT_POSTS:
+        return [], []
+    hdr = dict(_HDR)
+    hdr["Accept"] = "text/html,application/xhtml+xml"
+    if C.YT_POSTS_COOKIE:
+        hdr["Cookie"] = C.YT_POSTS_COOKIE
+    try:
+        r = requests.get(C.YT_CHANNEL_POSTS, headers=hdr, timeout=25)
+        if r.status_code == 200:
+            entries, bare, diag = _parse_posts_html(r.text or "")
+            if entries or bare:
+                log_yt(f"Posts: document -> {len(entries)} entries + {len(bare)} bare")
+                return entries, bare
+            log_yt(f"Posts: document {diag} -> 0, thu browse fallback")
+        else:
+            log_yt(f"Posts document http {r.status_code} -> thu browse fallback")
+    except Exception as e:
+        log_yt("Posts document loi mang:", e.__class__.__name__)
+    return _via_posts_browse()
+
+
 def get_yt_candidates():
     global _dumped_once
     verbose = os.getenv("YT_VERBOSE", "0") == "1"
+
     a_e, a_b, ava = _via_data_api()
     b_e, b_b, avb = _via_innertube()
     pools_e = [x for x in (a_e, b_e) if x]
     pools_b = [x for x in (a_b, b_b) if x]
-    if not pools_e and not pools_b:
+
+    post_e, post_b = _via_posts()
+
+    if not pools_e and not pools_b and not post_e and not post_b:
         sa = "khong key (BO QUA)" if a_e is None else "chay -> 0"
         sb = "khong key (BO QUA)" if b_e is None else "chay -> 0"
-        log_yt(f"0 ma. DataAPI: {sa}; InnerTube: {sb}. (OCR mode={C.OCR_MODE}.)")
+        log_yt(f"0 ma. DataAPI: {sa}; InnerTube: {sb}; Posts: 0. (OCR mode={C.OCR_MODE}.)")
         return [], []
+
     by_vid = {}
     for lst in pools_e:
         for e in lst:
@@ -273,43 +487,64 @@ def get_yt_candidates():
             continue
         seen.add(e["code"])
         final.append(e)
-    final = final[: C.YT_VIDEO_SCAN]          # = 3 (production)
+    final = final[: C.YT_VIDEO_SCAN]
+
+    if post_e:
+        kept = 0
+        for p in post_e:
+            if p["code"] in seen:
+                log_yt(f"Posts skip dup: `{p['code']}` da co tu video (tang text lo) "
+                       f"-> bo qua post, khong nhap 2 lan")
+                continue
+            if kept >= C.YT_POSTS_MAX:
+                log_yt(f"Posts dat cap {C.YT_POSTS_MAX}/vong -> con {len(post_e)-kept} cho vong sau")
+                break
+            final.append(p)
+            seen.add(p["code"])
+            kept += 1
+
+    all_pools_b = list(pools_b)
+    if post_b:
+        all_pools_b.append(post_b)
+
     bb = {}
-    for lst in pools_b:
+    for lst in all_pools_b:
         for c in lst:
             cur = bb.get(c["video_id"])
             if cur is None or c["idx"] < cur["idx"]:
                 bb[c["video_id"]] = c
-    # KHONG cat bare o day: quota OCR_MAX_IMAGES ap SAU gate trong ocr.py,
-    # de live/trailer (gate fail, im lang) khong an slot video ma-trong-anh.
     bare = sorted(bb.values(), key=lambda c: c["idx"])
-    # ===== sort lai theo BARE_ORDER (sua "giu pending hieu nhieu") =====
+
     order = (getattr(C, "BARE_ORDER", "newest-first") or "").strip().lower()
     if order == "newest-first":
-        bare = list(reversed(bare))     # dao nguoc: video moi nhat (cuoi list InnerTube) len dau
+        bare = list(reversed(bare))
     elif order == "random":
         import random
-        random.shuffle(bare)            # phan bo deu, tranh starvation phan cuoi
-    # "oldest-first" / khac: giu nguyen thu tu idx tang dan
+        random.shuffle(bare)
+
     avatar = (getattr(C, "YT_CHANNEL_AVATAR", "") or "").strip() or avb or ava
     for e in final:
         e["channel_avatar"] = avatar
     for c in bare:
         c["channel_avatar"] = avatar
+
+    n_post = sum(1 for e in final if e.get("via") == "POST")
     if verbose or not _dumped_once:
         _dumped_once = True
-        log_yt(f"{len(final)} VIDEO MOI NHAT CO MA TEXT (toi da {C.YT_VIDEO_SCAN}):")
+        log_yt(f"{len(final)} ENTRY CO MA TEXT (video<= {C.YT_VIDEO_SCAN} + post<= {C.YT_POSTS_MAX}; "
+               f"post={n_post}):")
         for i, e in enumerate(final, 1):
             tg = [f"via={e.get('via')}"]
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} UNG VIEN OCR (BARE_ORDER={order}; se duoc gate chan neu khong co "
-               f"chu CODE; chi video PASS gate moi tinh vao quota {C.OCR_MAX_IMAGES}):")
+        log_yt(f"{len(bare)} UNG VIEN OCR (BARE_ORDER={order}; gate chan neu khong chu CODE; "
+               f"chi PASS gate moi tinh quota {C.OCR_MAX_IMAGES}):")
         for i, c in enumerate(bare[:12], 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
         if len(bare) > 12:
             log_yt(f"   ... con {len(bare)-12} nua (khong dump)")
     else:
-        log_yt(f"OK ({len(final)} ma text + {len(bare)} ung vien OCR choi gate, BARE_ORDER={order})")
+        log_yt(f"OK ({len(final)} ma text [video+post={n_post}] + {len(bare)} ung vien OCR "
+               f"choi gate, BARE_ORDER={order})")
     return final, bare
