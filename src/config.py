@@ -72,13 +72,17 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
+
 # PRODUCTION: 3 video moi nhat co ma text (title/desc) duoc queue+redeem.
 YT_VIDEO_SCAN = 3
+
 # ocr.py _alert doc C.YT_COOLDOWN; truoc day chi ton tai trong main.py -> AttributeError
 #   -> crash giua _alert -> candidate doc duong bi bo, khong nhap. Nay o day.
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
+
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
+
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
 INNERTUBE_PUBLIC = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 INNERTUBE_KEY    = (os.getenv("INNERTUBE_KEY", "").strip() or INNERTUBE_PUBLIC)
@@ -87,6 +91,7 @@ INNERTUBE_VERSION = "2.20261014.00.00"
 
 YT_CHANNEL_NAME   = "Play Together VNG"
 YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
+YT_CHANNEL_POSTS  = "https://www.youtube.com/@PlayTogetherVNGofficial/posts"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
 # Overlay badge trong UI card InnerTube -> KHONG phai title that.
@@ -99,6 +104,39 @@ BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
 # Khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed (schema co dinh).
 # De 0 = tat hoan toan, chi dung title da parse; van rong -> webhook in "[Xem video](url)".
 OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
+
+# ================= COMMUNITY POSTS (tab /posts) =================
+# BANG CHUNG SCHEMA THAT (F12, tab renderer + backstagePostRenderer):
+#   - tab 'Bài đăng' browseEndpoint params = "EgVwb3N0c_IGBAoCSgA%3D" (=%3D -> '=').
+#   - post = sectionListRenderer>itemSectionRenderer>backstagePostThreadRenderer>post>
+#       backstagePostRenderer{ postId, contentText.runs[].text (chua 'MÃ CODE: <MA>'),
+#       backstageAttachment.backstageImageRenderer.image.thumbnails[] (anh post 1600x1600),
+#       command.browseEndpoint.canonicalBaseUrl = '/post/<postId>' }.
+# -> 3 duong lay code post (hedged, duong nao co bang chung truoc):
+#   (1) STRUCT: document GET /posts -> tach ytInitialData -> _walk_posts doc dung
+#       backstagePostRenderer (lay ca text-code + anh-post + link-thang postId).
+#   (2) FLAT: giai \\uXXXX ca HTML, chay thang regex 'MÃ CODE' (luoi khi blob/backstage
+#       doi key; chi ra entries text, khong ra anh/link).
+#   (3) BROWSE FALLBACK: neu document GET bi consent wall (http!=200 / khong co
+#       ytInitialData) -> POST /browse voi INNERTUBE_PARAMS_POSTS (params THAT o tren).
+# Dedupe: video entries di TRUOC post -> post trung code video skip. Post text-code ->
+#   entries (khong ton OCR). Post CHI co anh ma text KHONG ra code -> bare (ung vien OCR,
+#   cung logic video; gate chan neu anh khong chu CODE). Ca 2 chieu -> chi nhap 1 LAN.
+YT_POSTS      = os.getenv("YT_POSTS", "1").strip() != "0"
+YT_POSTS_MAX  = int(os.getenv("YT_POSTS_MAX", "5"))
+
+# Params browse tab posts THAT (decoded primary + encoded backup; _via_posts_browse thu lan luot).
+INNERTUBE_PARAMS_POSTS = [s.strip() for s in
+                          (os.getenv("INNERTUBE_PARAMS_POSTS")
+                           or "EgVwb3N0c_IGBAoCSgA=,EgVwb3N0c_IGBAoCSgA%3D").split(",")
+                          if s.strip()]
+
+# Cookie (ty) cho document GET /posts. MAC DINH RONG. Chi dat khi log FLOUD bao consent wall:
+#   F12 -> Application -> Cookies -> copy VISITOR_INFO1_LIVE + __Secure-ROLLOUT_TOKEN.
+YT_POSTS_COOKIE = os.getenv("YT_POSTS_COOKIE", "").strip()
+
+# Link thang mot bai dang Community: https://www.youtube.com/post/<postId>
+YT_POST_LINK = "https://www.youtube.com/post/"
 
 # ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
@@ -132,6 +170,7 @@ GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
 GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))            # tran/goi-per-LOOP
 GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))
 GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))
+
 # PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong.
 OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "3"))
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
