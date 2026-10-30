@@ -29,8 +29,6 @@ USE_API      = os.getenv("USE_API", "1") == "1"
 DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"
 TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()
 
-# Cac kind that bai co the chot cap code|id de khong retry vo tan.
-# ALREADY khong nam o day vi no co status rieng "already".
 SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other", "need_login"}
 
 
@@ -68,7 +66,6 @@ def process_code(session, code, users, state, source):
             send(msg_success(code, u["id"]))
             state.add(f"{code}|{u['id']}")
         elif st == "already":
-            # 2117/2121: ID nay da co code nay roi. Dong cap, khong coi la ma sai.
             send(msg_already(code, u["id"], r.get("reason", "")))
             state.add(f"{code}|{u['id']}")
         else:
