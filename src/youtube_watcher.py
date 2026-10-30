@@ -1,10 +1,14 @@
 # NGUON MA CHO VN = API (Data API v3 + InnerTube videos) + COMMUNITY POSTS (tab /posts).
 # TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC) + POST CO ma text;
-#   bare = video upload KHONG co ma text nhung CO thumbnail + POST CHI CO ANH ma text
-#   KHONG ra code = UNG VIEN OCR.
+#   bare = video upload KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
+# SUA BUG "Ma LIVESTREAM" (screenshot 20:01): OCR thumbnail teaser bi lay tu su kien
+#   (LIVESTREAM) lam ma. Fix ocr.py (_valid_code hau kiem prefix PT). RIENG POST:
+#   "dung cho OCR vao post" -> _walk_posts KHONG con day anh post vao bare. Post chi lay
+#   code tu contentText (text plain, deterministic); text khong co MÃ CODE: PT... -> BO QUA
+#   post do, khong OCR anh post (anh post cung mac loi "BAT MI CODE" nhu thumbnail video).
 # COMMUNITY POSTS (schema THAT, bang chung F12 backstagePostRenderer): 3 duong hedged
 #   (1) STRUCT _walk_posts doc dung postId/contentText/backstageImageRenderer -> entries
-#       (link thang /post/<postId> + anh post) hoac bare (anh post, text khong code).
+#       (link thang /post/<postId> + anh post de LEN ALERT, khong de OCR).
 #   (2) FLAT regex 'MÃ CODE' tren HTML da giai \\uXXXX -> luoi entries text.
 #   (3) BROWSE FALLBACK INNERTUBE_PARAMS_POSTS (params THAT) khi document GET consent wall.
 # Dedupe video-truoc-post-sau: final = video_cut(3) + post_keep, post trung code video skip.
@@ -21,9 +25,9 @@ _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _IMG_HOSTS = ("ytimg.com", "googleusercontent.com", "ggpht.com")
 _AV_TOKEN = re.compile(r"=s\d+-c\b")
 
-# Neo post: "MÃ CODE" / "MA CODE" (5 dau A + a/A) -> token ASCII >=6.
-# Cho pheo toi da 8 ky tu khong phai chu/sau (quote, backslash, space, dash...) de khop
-# ca dang escaped trong HTML JS sau khi giai \\uXXXX. Hau kiem prefix PT/min-len.
+# Neo post: "MÃ CODE" / "MA CODE" (5 dau A + a/A) -> token ASCII >=6. Cho pheo toi da 8 ky tu
+#   khong phai chu/sso (quote, backslash, space, dash...) de khop ca dang escaped trong HTML JS
+#   sau khi giai \\uXXXX. Hau kiem prefix PT/min-len chan 'CHUNG' tu 'CODE CHUNG HALLOWEEN'.
 _POST_CODE_RE = re.compile(
     r"M[ÀÁẢÃẠaàáảãạ]\s*CODE\s*[:\-–]?\s*[^A-Za-z0-9]{0,8}([A-Za-z0-9]{6,})", re.I)
 
@@ -46,7 +50,6 @@ def _host(u):
 
 
 def _abs_url(u):
-    """//yt3... -> https://yt3... ; khong doi gi neu da http(s)."""
     u = (u or "").strip()
     if u.startswith("//"):
         return "https:" + u
@@ -86,7 +89,6 @@ def _iter_strings(node):
 
 
 def _find_nodes(node, key):
-    """Lay moi dict con co key = <key> (duy de quy). Dung cho backstagePostRenderer."""
     if isinstance(node, dict):
         if key in node and isinstance(node[key], dict):
             yield node[key]
@@ -271,14 +273,13 @@ def _via_innertube():
 
 # ================= COMMUNITY POSTS (schema THAT: backstagePostRenderer) =================
 def _post_text(post):
-    """Noi dung contentText.runs[].text (code nam o day, bang chung F12)."""
     ct = post.get("contentText") or {}
     runs = ct.get("runs") or []
     return "".join(str(r.get("text", "")) for r in runs if isinstance(r, dict))
 
 
 def _post_image(post):
-    """Anh post tu backstageAttachment.backstageImageRenderer.image.thumbnails."""
+    """Anh post chi de LEN ALERT (MediaGallery), KHONG de OCR (sua 'dung cho OCR vao post')."""
     att = post.get("backstageAttachment") or {}
     bir = att.get("backstageImageRenderer") or {}
     img = bir.get("image") or {}
@@ -307,7 +308,6 @@ def _post_code(text):
 
 
 def _post_title(text):
-    """Title = dong dau contentText (vd '🧟【CODE CHUNG HALLOWEEN】...'), fallback nhan."""
     first = (text or "").split("\n", 1)[0].strip()
     if _looks_title(first):
         return first
@@ -315,43 +315,34 @@ def _post_title(text):
 
 
 def _walk_posts(j):
-    """Duyet backstagePostRenderer THAT -> (entries text-code, bare anh-post-text-khong-code).
-       entries: via=POST, video_url = link thang /post/<postId>, thumb_url = anh post.
-       bare: chi khi post CO anh nhung text KHONG ra code -> ung vien OCR."""
-    entries, bare = [], []
+    """Duyet backstagePostRenderer THAT -> (entries text-code, bare LUON RONG).
+       SUA 'dung cho OCR vao post': post chi lay code tu contentText. Text khong co
+       MÃ CODE: PT... -> BO QUA post (khong day anh post vao bare -> khong OCR anh post,
+       tranh loi 'Ma LIVESTREAM' tu anh teaser). Anh post van duoc giu trong entry de
+       hien MediaGallery khi text CO code."""
+    entries = []
     seen_code = set()
-    seen_pid = set()
     n = 0
     for post in _find_nodes(j, "backstagePostRenderer"):
         pid = str(post.get("postId", "") or "").strip()
         text = _post_text(post)
         code = _post_code(text)
-        img = _post_image(post)
+        if not code:
+            continue                         # <-- text khong code -> bo qua, KHONG OCR anh post
+        if code in seen_code:
+            continue
+        seen_code.add(code)
+        img = _post_image(post)              # anh chi de alert, khong de OCR
         link = (C.YT_POST_LINK + pid) if pid else C.YT_CHANNEL_POSTS
-
-        if code:
-            if code in seen_code:
-                continue
-            seen_code.add(code)
-            entries.append({"code": code, "title": _post_title(text),
-                            "video_id": ("POST-" + pid) if pid else ("POST-" + code),
-                            "video_url": link, "thumb_url": img,
-                            "via": "POST", "redeem": True, "idx": 100000 + n})
-            n += 1
-        elif img:
-            if pid and pid in seen_pid:
-                continue
-            if pid:
-                seen_pid.add(pid)
-            vid = ("POSTIMG-" + pid) if pid else ("POSTIMG-" + str(n))
-            bare.append({"idx": 200000 + n, "video_id": vid, "thumb_url": img,
-                         "video_url": link, "title": _post_title(text)})
-            n += 1
-    return entries, bare
+        entries.append({"code": code, "title": _post_title(text),
+                        "video_id": ("POST-" + pid) if pid else ("POST-" + code),
+                        "video_url": link, "thumb_url": img,
+                        "via": "POST", "redeem": True, "idx": 100000 + n})
+        n += 1
+    return entries, []                       # bare LUON rong voi post
 
 
 def _codes_from_text(s):
-    """FLAT luoi: chay thang regex tren xấp text (da giai \\uXXXX)."""
     out, seen = [], set()
     for m in _POST_CODE_RE.finditer(s or ""):
         tok = m.group(1).upper()
@@ -369,8 +360,6 @@ def _unescape_js(s):
 
 
 def _parse_posts_html(html):
-    """(1) STRUCT: tach ytInitialData -> _walk_posts. (2) FLAT: regex toan bo HTML.
-       Tra (entries, bare, diag)."""
     entries, bare = [], []
     struct_ok = False
     m = _YTID_MARK.search(html or "")
@@ -381,7 +370,6 @@ def _parse_posts_html(html):
             entries, bare = _walk_posts(obj)
         except Exception:
             struct_ok = False
-
     seen = {e["code"] for e in entries}
     for c in _codes_from_text(_unescape_js(html or "")):
         if c not in seen:
@@ -390,7 +378,6 @@ def _parse_posts_html(html):
                             "video_id": "POST-" + c, "video_url": C.YT_CHANNEL_POSTS,
                             "thumb_url": "", "via": "POST", "redeem": True,
                             "idx": 150000 + len(entries)})
-
     diag = ""
     if not entries and not bare:
         diag = (f"struct={'CO' if struct_ok else 'KHONG'} ytInitialData; flat 0; "
@@ -399,7 +386,6 @@ def _parse_posts_html(html):
 
 
 def _via_posts_browse():
-    """(3) FALLBACK: POST /browse voi INNERTUBE_PARAMS_POSTS (params THAT)."""
     if not C.INNERTUBE_KEY:
         return [], []
     for prm in C.INNERTUBE_PARAMS_POSTS:
@@ -434,7 +420,6 @@ def _via_posts_browse():
 
 
 def _via_posts():
-    """Tra (entries, bare). Thu document GET (struct+flat) truoc; neu rong -> browse fallback."""
     if not C.YT_POSTS:
         return [], []
     hdr = dict(_HDR)
