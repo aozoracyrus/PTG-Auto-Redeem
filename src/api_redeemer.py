@@ -86,7 +86,6 @@ def _classify(http_status, body):
     low = text.lower()
     ec = _extract_error_code(body)
 
-    # HTTP layer first for transport stuck. 400 business error van co the co errorCode.
     if http_status in C.HTTP_STUCK:
         return {
             "status": "stuck",
@@ -94,7 +93,6 @@ def _classify(http_status, body):
             "numeric": ec,
         }
 
-    # Numeric is authoritative.
     if ec is not None:
         if ec in C.NUM_SUCCESS:
             return {"status": "success", "reason": text or "Thành công", "numeric": ec}
@@ -146,11 +144,9 @@ def _classify(http_status, body):
                 "numeric": ec,
             }
 
-    # Text fallback, only if numeric absent or unknown.
     if _contains_any(low, C.CAPTCHA_HINTS):
         return {"status": "captcha", "reason": text or "Captcha"}
 
-    # ALREADY truoc NOT_EXIST vi 2121 co the chua chu "active code".
     if _contains_any(low, C.FAIL_ALREADY) or _contains_any(low, C.FAIL_USAGE):
         return {
             "status": "already",
@@ -194,7 +190,6 @@ def _classify(http_status, body):
     if _contains_any(low, C.TRANSIENT):
         return {"status": "retry", "reason": text or "Transient", "numeric": ec}
 
-    # Unknown: khong chot that bai, de retry/queue timeout xu ly sau.
     return {
         "status": "unknown",
         "reason": text or f"HTTP {http_status} unknown numeric={ec}",
@@ -217,7 +212,6 @@ def redeem_via_api(code, uid):
 
     res = _classify(r.status_code, body)
 
-    # Log chi khi co van de de debug, khong log success spam.
     if res.get("status") in ("failure", "stuck", "captcha", "retry", "unknown"):
         log_api(
             "API redeem non-success http", r.status_code,
