@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN (API-first + YouTube + OCR chuoi Gemini/EasyOCR)
+name: PTG Auto Redeem VN (API-first + YouTube + Community Posts + OCR chuoi Gemini/EasyOCR)
 
 on:
   workflow_dispatch: {}
@@ -27,34 +27,33 @@ jobs:
       YT_VERBOSE:       "0"
       DRY_RUN:          "0"
       TEST_CODE:        ""
+
       OCR_MODE:         "auto"
-      # auto = chuoi Gemini (chi giu ten CO trong list /v1beta/models cua key) > EasyOCR > Tesseract.
-      # 5xx tren 1 model -> TU DONG thu model ke tiep trong chuoi; CA chuoi 5xx -> EasyOCR che do
-      # THAM DO (chi duong tinh) + giu pending GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai.
       OCR_ENGINE:       "auto"
-      # LOCAL_WHEN (sua loi C "local spam anh + lan chiem Gemini dang song"):
-      #   fallback-only (MAC DINH) = local CHI chay khi Gemini THAT SU khong dung duoc.
-      #   probe = giu hanh vi cu (local tham do ca khi net). Bat khi MUON local an nhanh.
       LOCAL_WHEN:       "fallback-only"
+
       GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
-      # Chuoi uu tien (csv). Ten khong ton tai voi key -> bi BO + in log (khong doan mu).
-      # Doi thu tu/them ten o DAY, khong can sua code. GEMINI_MODEL (secret) neu dat se prepend.
       GEMINI_MODEL_CHAIN: "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite"
-      GEMINI_MODEL:     ${{ secrets.GEMINI_MODEL }}     # optional override (prepend)
+      GEMINI_MODEL:     ${{ secrets.GEMINI_MODEL }}
       GEMINI_TIMEOUT:   "45"
-      # GEMINI_MAX_CALLS = tran goi Gemini MỖI VÒNG LẶP (reset dau moi vong), KHONG con
-      # per-process. Het tran -> video chua xet GIU PENDING cho vong sau, KHONG dead_key ca
-      # run. dead_key chi do 402/403/429. KHONG CON GEMINI_SOFT_CAP_OK (da xoa het soft-cap).
       GEMINI_MAX_CALLS: "8"
-      GEMINI_BUSY_BACKOFF_SEC: "300"    # "cho 5p" khi ca 3 model dong
-      GEMINI_THROTTLE_SEC: "2.5"        # ngu sau moi 200 OK (chong hammer)
-      OCR_MAX_IMAGES:   "3"             # PRODUCTION: toi da 3 video PASS-GATE OCR sau/vong
+      GEMINI_BUSY_BACKOFF_SEC: "300"
+      GEMINI_THROTTLE_SEC: "2.5"
+
+      OCR_MAX_IMAGES:   "3"
       OCR_MAX_TRIES:    "50"
       OCR_LOOP_BUDGET:  "180"
       OCR_ALERT_CAP:    "6"
-      YT_VIDEO_SCAN:    "3"             # PRODUCTION: toi da 3 video title co ma text
-      BARE_ORDER:       "newest-first"  # video giftcode-moi len dau, tranh bi trailer-cu chim
-      OCR_USE_OEMBED:   "1"             # de 0 = tat oEmbed (chi title InnerTube + link thuan)
+
+      YT_VIDEO_SCAN:    "3"
+      BARE_ORDER:       "newest-first"
+      OCR_USE_OEMBED:   "1"
+
+      YT_POSTS:         "1"
+      YT_POSTS_MAX:     "5"
+      INNERTUBE_PARAMS_POSTS: "EgVwb3N0c_IGBAoCSgA=,EgVwb3N0c_IGBAoCSgA%3D"
+      YT_POSTS_COOKIE:  ${{ secrets.YT_POSTS_COOKIE }}
+
       WORKFLOW_FILE:    "redeem.yml"
       DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
       GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
@@ -68,8 +67,6 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
 
-      # Torch CPU phuc vu EasyOCR/Tesseract = duong ray khi Gemini busy/dead. Gemini (uu tien)
-      # la API remote -> khong can torch; nhung GIU fallback de he thong song du khi Gemini dong.
       - name: Install torch (CPU only, cho fallback)
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
@@ -100,7 +97,7 @@ jobs:
       - name: Fetch camoufox engine
         run: python -m camoufox fetch
 
-      - name: Run loop (API redeem + YouTube + OCR chuoi Gemini/EasyOCR)
+      - name: Run loop (API redeem + YouTube + Posts + OCR chuoi Gemini/EasyOCR)
         id: run
         run: python src/main.py
 
