@@ -407,7 +407,7 @@ def _pick(rec):
 def _ensure_candidate(rec, authoritative):
     if rec.get("gemini_done"):
         cand = _pick(rec)
-        return cand, (True if cand is not None else False)
+        return cand, True
     while True:
         cand = _pick(rec)
         if cand is not None:
@@ -500,7 +500,6 @@ def _try_code(code, users, state):
             state.add(key)
             committed += 1
         elif st == "already":
-            # 2117/2121: da co code nay roi cho ID nay. Dong cap, khong blacklist code.
             send(msg_already(code, u["id"], r.get("reason", "")))
             state.add(key)
             committed += 1
