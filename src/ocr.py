@@ -1,7 +1,14 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
 # 2117/2121 trong _try_code duoc xu ly la ALREADY: dong cap code|id, khong blacklist code,
 # khong spam that bai do. Candidate chi bi blacklist khi that su not_exist (2106/2102).
-import os, io, time, json, base64, requests
+# SUA BUG "Ma LIVESTREAM" (screenshot 20:01): code_from_ocr_text (parsers) KHONG loc
+#   CODE_PREFIXES -> thumbnail teaser "BAT MI CODE LIVESTREAM" bi lay "LIVESTREAM" lam ma,
+#   queue + alert + goi API rac. Fix TAI TANG GOI (khong dung parsers.py chua thay dia):
+#   moi token tu code_from_ocr_text phai qua _valid_code() (prefix PT + min-len + ASCII)
+#   truoc khi ghi vao reads. Anh chi co keyword ma khong co PT-code -> reads rong ->
+#   khong candidate -> KHONG con alert "Ma LIVESTREAM". Neu sau nay VNG doi dau ma, chi
+#   sua CODE_PREFIXES trong config.py, khong sua code.
+import os, io, re, time, json, base64, requests
 from collections import Counter
 from . import config as C
 from .parsers import code_from_ocr_text
@@ -51,6 +58,19 @@ _GEMINI_PROMPT = (
     "tren cung dong (khong tach roi). "
     "(5) Khong giai thich, khong mo dau, chi tra danh sach dong."
 )
+
+
+# ================= Hau kiem MA (sua bug "Ma LIVESTREAM") =================
+def _valid_code(c):
+    """Chi chap nhan token dang MA THAT: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
+       ASCII chu/sso thuong. Chan 'LIVESTREAM','HAPPENING','TOMORROW'... la tu su kien
+       dung sau keyword CODE trong overlay teaser. Doi dau ma = sua config.CODE_PREFIXES."""
+    c = (c or "").strip().upper()
+    if len(c) < C.CODE_MIN_LEN:
+        return False
+    if not c.startswith(tuple(C.CODE_PREFIXES)):
+        return False
+    return bool(re.fullmatch(r"[A-Z0-9]+", c))
 
 
 def reset_gemini_budget():
@@ -243,6 +263,8 @@ def _gemini_pass(rec):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
+            if not _valid_code(c):          # <-- SUA BUG: chan 'LIVESTREAM'...
+                continue
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
 
 
@@ -358,6 +380,8 @@ def _run_recipe_local(rec, idx):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
+            if not _valid_code(c):          # <-- SUA BUG: chan 'LIVESTREAM'...
+                continue
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
     rec["recipes_used"].append(idx)
