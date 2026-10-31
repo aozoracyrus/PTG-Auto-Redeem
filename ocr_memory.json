@@ -840,5 +840,23 @@
 "pending_since": null,
 "gemini_model": "gemini-3.5-flash-lite",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"yTtRmTRLq70": {
+"video_id": "yTtRmTRLq70",
+"thumb": "https://i.ytimg.com/vi/yTtRmTRLq70/hq720.jpg?sqp=-oaymwE2CNAFEJQDSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARgmIFwocjAP&rs=AOn4CLATh0se86hJFyildNyj3hU01amhOQ",
+"title": "PLAY TOGETHER VNG | \"ĐÓN MÙA THU CÙNG TỚ NHÉ!\" ~ GÓI MỚI OUTFIT HẸN HÒ MÙA THU",
+"video_url": "https://www.youtube.com/watch?v=yTtRmTRLq70",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY TOGETHER VNG Gói mới Outfit hẹn hò mùa thu",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.8-flash",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
