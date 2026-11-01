@@ -858,5 +858,23 @@
 "pending_since": null,
 "gemini_model": "gemini-3.8-flash",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"UPRcqm7haNE": {
+"video_id": "UPRcqm7haNE",
+"thumb": "https://i.ytimg.com/vi/UPRcqm7haNE/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLB0J_Ee9gq5sjlWW6NJHE3I0VfjeQ",
+"title": "PLAY TOGETHER VNG | TỔNG HỢP NHỮNG VẬT PHẨM TRONG HỘP BỐC THĂM BLACK FRIDAY MỚI",
+"video_url": "https://www.youtube.com/watch?v=UPRcqm7haNE",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY TOGETHER VNG REVIEW BỐC THĂM MỚI BLACK FRIDAY PLAY PLAY",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.5-flash-lite",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
