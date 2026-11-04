@@ -912,5 +912,23 @@
 "pending_since": null,
 "gemini_model": "gemini-3.8-flash",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"V4nugSYTLvQ": {
+"video_id": "V4nugSYTLvQ",
+"thumb": "https://i.ytimg.com/vi/V4nugSYTLvQ/hq720.jpg?sqp=-oaymwEgCNAFEJQDSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC8xg=&rs=AOn4CLDfBSD9YUp4DKKr-1aF8zkR9tMN-Q",
+"title": "PLAY TOGETHER VNG | CÔNG VIỆC CỦA TỚ BẬN RỘN LẮM ĐÓ - TRANG PHỤC CHỦ TỊCH HỘI HỌC SINH CHEONGRAM",
+"video_url": "https://www.youtube.com/watch?v=V4nugSYTLvQ",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY TOGETHER TRANG PHỤC MỚI CHỦ TỊCH HỘI HỌC SINH CHEONGRAM",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.5-flash-lite",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
