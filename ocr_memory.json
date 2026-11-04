@@ -930,5 +930,23 @@
 "pending_since": null,
 "gemini_model": "gemini-3.5-flash-lite",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"-CbBFB7IEt8": {
+"video_id": "-CbBFB7IEt8",
+"thumb": "https://i.ytimg.com/vi/-CbBFB7IEt8/hq720.jpg?sqp=-oaymwE2CNAFEJQDSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhPIFsoZTAP&rs=AOn4CLAt9J1k_lUlCGXlUQ4mqFcHsYOR2w",
+"title": "PLAY TOGETHER VNG | NHẠC NỀN SỰ KIỆN MỚI XÂM LƯỢC NGOÀI HÀNH TINH PLAY TOGETHER 1 phút,",
+"video_url": "https://www.youtube.com/watch?v=-CbBFB7IEt8",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY VNG TOGETHER PLAY TOGETHER VNG XÂM LƯỢC NGOÀI HÀNH TINH 0:33 1:49",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.6-flash",
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
