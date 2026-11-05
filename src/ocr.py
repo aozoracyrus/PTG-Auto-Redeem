@@ -1,16 +1,23 @@
 # OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
 # 2117/2121 trong _try_code duoc xu ly la ALREADY: dong cap code|id, khong blacklist code,
 # khong spam that bai do. Candidate chi bi blacklist khi that su not_exist (2106/2102).
-# SUA BUG "Ma LIVESTREAM" (screenshot 20:01): code_from_ocr_text (parsers) KHONG loc
-#   CODE_PREFIXES -> thumbnail teaser "BAT MI CODE LIVESTREAM" bi lay "LIVESTREAM" lam ma.
-#   Fix: moi token tu code_from_ocr_text phai qua _valid_code() (prefix PT + min-len).
-# SUA BUG "bo sot PTSUPERHERO" (screenshot 21:48): thumbnail "CO DE CHUNG PTSUPERHERO" ->
-#   parser goc lay token DAU sau keyword = "CHUNG" (tu noi), _valid_code chan -> reads rong
-#   -> LOT MAT ma that. Fix: LUOI THU 2 _codes_fallback() cho phep 0-3 TU NOI (CHUNG/RIENG/
-#   MOI/TANG/LIVE/NEW) chen giua keyword va ma, chay SAU parser goc, chi nap them ma PT that
-#   ma parser goc bo sot. Van giu _valid_code nen LIVESTREAM khong quay lai. LUOI nay nam
-#   trong ocr.py (KHONG dung parsers.py chua thay dia); muon va 1 cho duy nhat cho moi caller
-#   thi paste parsers.py, sua regex neo trong code_sau_keyword_yt.
+# KIEN TRUC OCR = SEMANTIC + REGEX (hedged, bang chung 4 anh F12 22:18-22:19):
+#   Bang chung: hoi Gemini "dau la code toi nhap" tren (a) teaser "BAT MI CODE LIVESTREAM"
+#     -> model tra "khong co ma, phai xem livestream" (KHONG bia); (b) "CO DE CHUNG THANG 11
+#     PTHELLOAUTUMN" -> model tra "PTHELLOAUTUMN" (bo qua tu noi CHUNG/THANG 11). Day la thu
+#     regex khong lam duoc: regex chi nhin mau chuoi, khong hieu nghiep vu "chu CODE trang tri
+#     vs ma redeem that". Nen ta HOI model, khong chi doc chu.
+#   CUNG 1 LAN GOI Gemini (KHONG ton them call -> khong ton phi): prompt yeu cau tra JSON
+#     {"all_text":..., "redeem_code":...}. all_text -> gate keyword + luoi regex (du phong).
+#     redeem_code -> luoi SEMANTIC, weight cao (thang khi ca hai cung ra). Van chay _valid_code
+#     (form PT+>=6) sau semantic -> ma bia-leaked van bi server 2106 + OCR_MAX_TRIES + ping do o
+#     tang duoi (luoi "auto thu tu sua" da co).
+#   Fail-soft: model khong tra hop le JSON -> coi ca response la all_text, chay regex nhu cu
+#     (mat loi ich semantic lan do, KHONG mat tinh nang).
+#   Im-lang-teaser: model chu dinh tra redeem_code=null (JSON parse OK) VA ca hai luoi deu
+#     rong -> done="no_code" (KHONG ping). Chi ping khi model khong hop tac format (parse fail).
+# SUA BUG cu: "Ma LIVESTREAM" (20:01) -> _valid_code chan; "bo sot PTSUPERHERO" (21:48) ->
+#   _codes_fallback (luoi regex cho duong local) + gio day semantic bat thang tu dau.
 import os, io, re, time, json, base64, requests
 from collections import Counter
 from . import config as C
@@ -49,25 +56,41 @@ RECIPES = [
     (2, "sharp"), (3, "sharp"), (4, "bin"), (5, "gray"),
 ]
 
+# PROMPT SEMANTIC (bang chung 4 anh): model vua LIET KE (chong bia: chi ghi chu THUC SU thay)
+#   vua TU PHAN "dau la ma redeem" (semantic, bo hardcode tu noi cua regex). FEW-SHOT lay
+#   CHINH 2 case ban vua quay (LIVESTREAM->null, PTHELLOAUTUMN->ma) -> bang chung noi tai,
+#   khong doan. TRA 1 JSON duy nhat de CUNG 1 lan goi vua co all_text (regex/gate) vua co
+#   redeem_code (semantic). Quy tac chong hallucination nam trong prompt + _valid_code o tang
+#   goi + server 2106 o tang duoi (3 lop, khong tin tuong tuyet doi vao model).
 _GEMINI_PROMPT = (
-    "Ban la cong cu trich xuat chu (OCR) tu anh thumbnail game. Nhiem vu: liet ke CHINH XAC "
-    "moi chuoi chu (tieng Viet co dau va tieng Anh) THUC SU nhin thay trong anh, ke ca chu "
-    "cach dieu, chu co do bong, chu trong khung/nut/pill. Quy tac bat buoc: "
-    "(1) CHI ghi chu thuc su thay, TUYET DOI khong suy doan, khong bia, khong sua loi chinh ta, "
-    "khong them chu khong co. "
-    "(2) Moi chuoi nam tren MOT dong rieng. "
-    "(3) Giu nguyen viet hoa/thuong va dau tieng Viet. "
-    "(4) Neu thay cum 'CODE' hoac 'CO DE' dung canh mot chuoi ma, ghi nguyen ven chuoi ma do "
-    "tren cung dong (khong tach roi). "
-    "(5) Khong giai thich, khong mo dau, chi tra danh sach dong."
+    "Ban la bo phan trich MA REDEEM tu anh thumbnail game Play Together (VNG). "
+    "Anh co the la: (A) MOT thong bao su kien/teaser KHONG chua ma (chi co chu nhu 'CODE', "
+    "'LIVESTREAM', 'BAT MI CODE', 'CO DE CHUNG', ten su kien, ngay thang...), hoac "
+    "(B) CO chua MA REDEEM that (chuoi viet hoa, khong dau, thuong bat dau 'PT', nam sau cum "
+    "'CODE'/'MA CODE' hoac trong khung noi bat). "
+    "TRA VE DUY NHAT MOT object JSON hop le, khong markdown, khong van ban ngoai JSON: "
+    '{"all_text": "<moi chu NHIN THAY trong anh, giu nguyen dau tieng Viet, noi cach bang space>", '
+    '"redeem_code": "<MA REDEEM that neu thay ro, viet hoa khong dau>"} hoac '
+    '{"all_text": "...", "redeem_code": null}. '
+    "Quy tac bat buoc cho redeem_code: "
+    "(1) Chi lay chuoi ma THUC SU nhin thay trong anh; TUYET DOI khong bia, khong suy doan, "
+    "khong 'don' ma tu ten su kien. "
+    "(2) Neu anh chi la teaser/thong bao su kien MA KHONG co chuoi ma nao -> redeem_code = null. "
+    "(3) KHONG lay cac tu nhu LIVESTREAM, HALLOWEEN, CODE, CHUNG, RIENG, MOI, TANG, THANG, "
+    "ten nhan vat, hashtag (#...) lam ma. "
+    "(4) Ma that thuong: viet hoa, khong dau, >= 6 ky tu, da phan bat dau 'PT'. "
+    "VI DU (hay hoc theo): anh 'DEM HOI HALLOWEEN / BAT MI / CODE / LIVESTREAM' -> "
+    'redeem_code = null. anh "CO DE CHUNG / THANG 11 / PTHELLOAUTUMN" -> '
+    'redeem_code = "PTHELLOAUTUMN".'
 )
 
 
-# ================= Hau kiem MA (sua bug "Ma LIVESTREAM") =================
+# ================= Hau kiem MA (luoi form, van dung sau semantic) =================
 def _valid_code(c):
-    """Chi chap nhan token dang MA THAT: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
-       ASCII chu/sso thuong. Chan 'LIVESTREAM','HAPPENING','TOMORROW'... la tu su kien
-       dung sau keyword CODE trong overlay teaser. Doi dau ma = sua config.CODE_PREFIXES."""
+    """Chi chap nhan token dang MA THAT ve FORM: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
+       ASCII chu/sso thuong. Chan 'LIVESTREAM','CHUNG','HAPPENING'... KHONG phai ma.
+       Doi dau ma = sua config.CODE_PREFIXES. (Luoi nay KHONG chong duoc ma PT-bia; ma
+       PT-bia do server 2106 + OCR_MAX_TRIES + ping do o tang duoi.)"""
     c = (c or "").strip().upper()
     if len(c) < C.CODE_MIN_LEN:
         return False
@@ -76,19 +99,14 @@ def _valid_code(c):
     return bool(re.fullmatch(r"[A-Z0-9]+", c))
 
 
-# ================= LUOI THU 2: cho phep TU NOI chen giua keyword va ma =================
-# Screenshot 21:48: "CO DE CHUNG PTSUPERHERO" -> parser goc lay "CHUNG" (tu noi) lam token
-#   dau sau keyword -> bi _valid_code chan -> LOT MAT PTSUPERHERO. Regex nay cho phep 0-3 tu
-#   noi pho bien (CHUNG/RIENG/MOI/TANG/LIVE/NEW, ca dau va khong dau) nam giua keyword va ma,
-#   rồi capture ma. Van chay _valid_code nen LIVESTREAM (khong prefix PT) van bi chan.
+# ================= LUOI REGEX (du phong cho duong LOCAL khi Gemini chet) =================
 _KW_SUFFIX_WORDS = r"(?:\s+(?:CHUNG|RIÊNG|RIENG|MỚI|MOI|TẶNG|TANG|LIVE|NEW))*"
 _OCR_CODE_FALLBACK_RE = re.compile(
     r"C[OÔ][\s.:|_-]*D[EÉ]" + _KW_SUFFIX_WORDS + r"\s+([A-Z0-9]{6,})", re.I)
 
 
 def _codes_fallback(txt):
-    """Luoi thu 2: tra list ma PT that ma code_from_ocr_text co the bo sot do TU NOI chen
-       giua keyword va ma. Chi tra token qua _valid_code -> khong bao gio tra 'CHUNG'/'LIVESTREAM'."""
+    """Luoi regex: cho phep 0-3 tu noi chen giua keyword va ma. Chi tra token qua _valid_code."""
     out = []
     for m in _OCR_CODE_FALLBACK_RE.finditer(txt or ""):
         tok = m.group(1).upper()
@@ -262,6 +280,60 @@ def _gemini_call(png_bytes, rec):
         continue
 
 
+# ================= PARSE JSON semantic (fail-soft) =================
+def _gemini_parse_answer(txt):
+    """Boc JSON {all_text, redeem_code} tu response Gemini. Chiu ca markdown fence.
+       Tra (all_text, redeem_code|None, parsed_ok). parsed_ok=False = model khong tra
+       hop le JSON -> caller coi ca response la all_text (fail-soft, regex van chay)."""
+    s = (txt or "").strip()
+    if not s:
+        return "", None, False
+    if s.startswith("```"):                      # bo ```json ... ``` neu model lo boc
+        nl = s.find("\n")
+        if nl != -1:
+            s = s[nl + 1:]
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[:-3]
+        s = s.strip()
+    st, en = s.find("{"), s.rfind("}")
+    if st == -1 or en == -1 or en <= st:
+        return (txt or ""), None, False          # khong co JSON -> fail-soft
+    try:
+        obj = json.loads(s[st:en + 1])
+    except Exception:
+        return (txt or ""), None, False
+    if not isinstance(obj, dict):
+        return (txt or ""), None, False
+    all_text = str(obj.get("all_text", "") or "")
+    rc = obj.get("redeem_code", None)
+    code = None if rc is None else (str(rc).strip().upper() or None)
+    if not all_text and code:                    # model chi tra code -> dung no lam all_text
+        all_text = code
+    return all_text, code, True
+
+
+def _absorb_gemini(rec, all_text, sem_code):
+    """Nap ket qua semantic + regex vao reads. Semantic weight 10 (thang khi ca hai cung ra);
+       regex weight 1 (luoi). Tra True neu semantic co nap ma hop le.
+       LUU Y: _valid_code la luoi FORM, khong chong duoc ma PT-bia -> ma PT-bia do server
+       2106 + OCR_MAX_TRIES + ping do o tang duoi (thiet ke 'auto thu tu sua' san co)."""
+    if all_text and all_text.strip():
+        rec["raw"] = (rec["raw"] + " | " + all_text.strip().replace("\n", " "))[:900]
+    hit = False
+    if sem_code and _valid_code(sem_code):
+        rec["reads"][sem_code] = rec["reads"].get(sem_code, 0) + 10
+        hit = True
+    for c in code_from_ocr_text(all_text or ""):
+        if not _valid_code(c):
+            continue
+        rec["reads"][c] = rec["reads"].get(c, 0) + 1
+    for c in _codes_fallback(all_text or ""):
+        rec["reads"][c] = rec["reads"].get(c, 0) + 1
+    if hit:
+        rec["sem_hit"] = True
+    return hit
+
+
 def _gemini_pass(rec):
     if rec.get("gemini_done"):
         return
@@ -284,15 +356,12 @@ def _gemini_pass(rec):
         return
     rec["gemini_done"] = True
     for txt in texts:
-        if txt.strip():
-            rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
-        for c in code_from_ocr_text(txt):
-            if not _valid_code(c):          # <-- chan 'LIVESTREAM'...
-                continue
-            rec["reads"][c] = rec["reads"].get(c, 0) + 1
-        # LUOI THU 2: bat ma bi parser goc bo sot do TU NOI (CHUNG/RIENG/...) chen giua.
-        for c in _codes_fallback(txt):
-            rec["reads"][c] = rec["reads"].get(c, 0) + 1
+        all_text, sem_code, parsed_ok = _gemini_parse_answer(txt)
+        _absorb_gemini(rec, all_text, sem_code)
+        # Model CHU DINH tra null (JSON parse OK) = bang chung anh khong chua ma (teaser).
+        # Ghi de sau nay neu ca hai luoi deu rong -> im lang, KHONG ping rac.
+        if parsed_ok and sem_code is None:
+            rec["sem_declared_none"] = True
 
 
 def _easy_reader():
@@ -358,7 +427,8 @@ def _new_rec(v):
     return {"video_id": v["video_id"], "thumb": v["thumb_url"], "title": v.get("title", ""),
             "video_url": v.get("video_url", ""), "recipes_used": [], "reads": {},
             "raw": "", "tried": [], "tries": 0, "alerts": 0, "done": None, "pinged": False,
-            "gemini_done": False, "pending_since": None, "gemini_model": ""}
+            "gemini_done": False, "pending_since": None, "gemini_model": "",
+            "sem_hit": False, "sem_declared_none": False}
 
 
 def _fetch_bytes(url):
@@ -407,12 +477,11 @@ def _run_recipe_local(rec, idx):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
-            if not _valid_code(c):          # <-- chan 'LIVESTREAM'...
+            if not _valid_code(c):
                 continue
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
-        # LUOI THU 2: bat ma bi parser goc bo sot do TU NOI chen giua (EasyOCR/Tesseract).
-        for c in _codes_fallback(txt):
+        for c in _codes_fallback(txt):           # luoi regex cho duong LOCAL (khong co semantic)
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
     rec["recipes_used"].append(idx)
@@ -456,7 +525,7 @@ def _pick(rec):
     pool = [(c, n) for c, n in rec["reads"].items() if c not in rec["tried"]]
     if not pool:
         return None
-    return max(pool, key=lambda cn: (cn[1], len(cn[0])))[0]
+    return max(pool, key=lambda cn: (cn[1], len(cn[0])))[0]   # weight 10 semantic thang 1 regex
 
 
 def _ensure_candidate(rec, authoritative):
@@ -577,6 +646,8 @@ def _alert(rec, code, note, redeem_flag):
         log_hook(f"OCR alert vuot cap ({C.OCR_ALERT_CAP}) cho {rec['video_id']} -> chi log")
         return
     rec["alerts"] += 1
+    if rec.get("sem_hit"):
+        note = (note + " · Gemini xác nhận đây là mã redeem (không phải chữ trang trí).").strip(" ·")
     entry = {
         "code": code,
         "title": _resolve_title(rec),
@@ -656,7 +727,13 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand, finalize = _ensure_candidate(rec, auth)
             if cand is None:
-                if finalize:
+                # Teaser: model CHU DINH tra null (JSON OK) VA ca hai luoi deu rong -> im lang.
+                if rec.get("gemini_done") and rec.get("sem_declared_none") and not rec["reads"]:
+                    rec["done"] = "no_code"
+                    log_yt(f"OCR[{_engine_label(rec)}]: Gemini + regex dong thuan anh chi la "
+                           f"thong bao su kien, khong chua ma ({rec['video_id']}) -> bo qua IM LANG, "
+                           f"khong ping rac")
+                elif finalize:
                     rec["done"] = "exhausted"
                     log_warn(f"OCR[{_engine_label(rec)}] co chu CODE nhung khong doc duoc ma "
                              f"({rec['video_id']}) -> PING nhap tay")
@@ -743,6 +820,11 @@ def alert_only(bare_videos, known_codes=None):
             break
         deep_used += 1
         cand, _fin = _ensure_candidate(rec, auth)
+        if cand is None and rec.get("gemini_done") and rec.get("sem_declared_none") and not rec["reads"]:
+            rec["done"] = "no_code"
+            log_yt(f"OCR(alert): teaser khong chua ma ({rec['video_id']}) -> bo qua IM LANG")
+            changed = True
+            continue
         if cand and cand in known:
             rec["done"] = "dup_with_text"
             log_yt(f"OCR(alert) skip dup: `{cand}` da co tu tang text -> bo qua {rec['video_id']}")
