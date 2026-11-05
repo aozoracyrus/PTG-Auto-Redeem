@@ -2,12 +2,15 @@
 # 2117/2121 trong _try_code duoc xu ly la ALREADY: dong cap code|id, khong blacklist code,
 # khong spam that bai do. Candidate chi bi blacklist khi that su not_exist (2106/2102).
 # SUA BUG "Ma LIVESTREAM" (screenshot 20:01): code_from_ocr_text (parsers) KHONG loc
-#   CODE_PREFIXES -> thumbnail teaser "BAT MI CODE LIVESTREAM" bi lay "LIVESTREAM" lam ma,
-#   queue + alert + goi API rac. Fix TAI TANG GOI (khong dung parsers.py chua thay dia):
-#   moi token tu code_from_ocr_text phai qua _valid_code() (prefix PT + min-len + ASCII)
-#   truoc khi ghi vao reads. Anh chi co keyword ma khong co PT-code -> reads rong ->
-#   khong candidate -> KHONG con alert "Ma LIVESTREAM". Neu sau nay VNG doi dau ma, chi
-#   sua CODE_PREFIXES trong config.py, khong sua code.
+#   CODE_PREFIXES -> thumbnail teaser "BAT MI CODE LIVESTREAM" bi lay "LIVESTREAM" lam ma.
+#   Fix: moi token tu code_from_ocr_text phai qua _valid_code() (prefix PT + min-len).
+# SUA BUG "bo sot PTSUPERHERO" (screenshot 21:48): thumbnail "CO DE CHUNG PTSUPERHERO" ->
+#   parser goc lay token DAU sau keyword = "CHUNG" (tu noi), _valid_code chan -> reads rong
+#   -> LOT MAT ma that. Fix: LUOI THU 2 _codes_fallback() cho phep 0-3 TU NOI (CHUNG/RIENG/
+#   MOI/TANG/LIVE/NEW) chen giua keyword va ma, chay SAU parser goc, chi nap them ma PT that
+#   ma parser goc bo sot. Van giu _valid_code nen LIVESTREAM khong quay lai. LUOI nay nam
+#   trong ocr.py (KHONG dung parsers.py chua thay dia); muon va 1 cho duy nhat cho moi caller
+#   thi paste parsers.py, sua regex neo trong code_sau_keyword_yt.
 import os, io, re, time, json, base64, requests
 from collections import Counter
 from . import config as C
@@ -71,6 +74,27 @@ def _valid_code(c):
     if not c.startswith(tuple(C.CODE_PREFIXES)):
         return False
     return bool(re.fullmatch(r"[A-Z0-9]+", c))
+
+
+# ================= LUOI THU 2: cho phep TU NOI chen giua keyword va ma =================
+# Screenshot 21:48: "CO DE CHUNG PTSUPERHERO" -> parser goc lay "CHUNG" (tu noi) lam token
+#   dau sau keyword -> bi _valid_code chan -> LOT MAT PTSUPERHERO. Regex nay cho phep 0-3 tu
+#   noi pho bien (CHUNG/RIENG/MOI/TANG/LIVE/NEW, ca dau va khong dau) nam giua keyword va ma,
+#   rồi capture ma. Van chay _valid_code nen LIVESTREAM (khong prefix PT) van bi chan.
+_KW_SUFFIX_WORDS = r"(?:\s+(?:CHUNG|RIÊNG|RIENG|MỚI|MOI|TẶNG|TANG|LIVE|NEW))*"
+_OCR_CODE_FALLBACK_RE = re.compile(
+    r"C[OÔ][\s.:|_-]*D[EÉ]" + _KW_SUFFIX_WORDS + r"\s+([A-Z0-9]{6,})", re.I)
+
+
+def _codes_fallback(txt):
+    """Luoi thu 2: tra list ma PT that ma code_from_ocr_text co the bo sot do TU NOI chen
+       giua keyword va ma. Chi tra token qua _valid_code -> khong bao gio tra 'CHUNG'/'LIVESTREAM'."""
+    out = []
+    for m in _OCR_CODE_FALLBACK_RE.finditer(txt or ""):
+        tok = m.group(1).upper()
+        if _valid_code(tok):
+            out.append(tok)
+    return out
 
 
 def reset_gemini_budget():
@@ -263,8 +287,11 @@ def _gemini_pass(rec):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
-            if not _valid_code(c):          # <-- SUA BUG: chan 'LIVESTREAM'...
+            if not _valid_code(c):          # <-- chan 'LIVESTREAM'...
                 continue
+            rec["reads"][c] = rec["reads"].get(c, 0) + 1
+        # LUOI THU 2: bat ma bi parser goc bo sot do TU NOI (CHUNG/RIENG/...) chen giua.
+        for c in _codes_fallback(txt):
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
 
 
@@ -380,8 +407,12 @@ def _run_recipe_local(rec, idx):
         if txt.strip():
             rec["raw"] = (rec["raw"] + " | " + txt.strip().replace("\n", " "))[:900]
         for c in code_from_ocr_text(txt):
-            if not _valid_code(c):          # <-- SUA BUG: chan 'LIVESTREAM'...
+            if not _valid_code(c):          # <-- chan 'LIVESTREAM'...
                 continue
+            cnt[c] += 1
+            rec["reads"][c] = rec["reads"].get(c, 0) + 1
+        # LUOI THU 2: bat ma bi parser goc bo sot do TU NOI chen giua (EasyOCR/Tesseract).
+        for c in _codes_fallback(txt):
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
     rec["recipes_used"].append(idx)
