@@ -948,5 +948,27 @@
 "pending_since": null,
 "gemini_model": "gemini-3.6-flash",
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"laX0w5c-aks": {
+"video_id": "laX0w5c-aks",
+"thumb": "https://i.ytimg.com/vi/laX0w5c-aks/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAojm_DAvO8x4DOtixOnk90lLjTNw",
+"title": "PLAY TOGETHER VNG | HÉ LỘ CODE CHUNG CHO SỰ KIỆN MỚI XÂM LƯỢC NGOÀI HÀNH TINH PLAY TOGETHER",
+"video_url": "https://www.youtube.com/watch?v=laX0w5c-aks",
+"recipes_used": [],
+"reads": {
+"PTSUPERHERO": 10
+},
+"raw": " | PLAY TOGETHER VNG CÓ DỀ CHUNG PTSUPERHERO",
+"tried": [],
+"tries": 1,
+"alerts": 1,
+"done": "committed",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.6-flash",
+"sem_hit": true,
+"sem_declared_none": false,
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
