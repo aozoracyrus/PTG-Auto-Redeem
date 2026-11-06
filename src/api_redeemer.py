@@ -1,6 +1,10 @@
-# API REDEEMER. Phan quang thang/thua = MA SO JSON, khong phu thuoc ngon ngu.
-# 2117/2121 -> status="already": ID nay DA REDEEM CODE NAY ROI (gioi han 1/1 cho code|id).
-#   KHONG phai ma sai, KHONG blacklist code, CHI dong cap code|id.
+# API REDEEMER. Phân quang thắng/thua = MÃ SỐ JSON + TEXT, không phụ thuộc ngôn ngữ.
+# 2117/2121: BẰNG CHỨNG RUNTIME 05/11/2026 = "Active code: usage limit" -> HẾT LƯỢT TOÀN CỤC.
+#   Nên PHÂN LOẠI THEO TEXT TRƯỚC, MÃ SỐ SAU:
+#     - text khớp USAGE_LIMIT_TEXT -> status="failure", kind="usage_limit" (ĐỎ + blacklist code).
+#     - text khớp ALREADY_SELF_TEXT -> status="already" (XANH + đóng cặp, KHÔNG blacklist).
+#     - mã 2117/2121 mà text không rõ -> MẶC ĐỊNH usage_limit (đỏ + blacklist), theo bằng chứng.
+#   blacklsit code do tầng gọi (main.py/ocr.py) xử lý qua key "|__DEAD__" trong state.
 import json, uuid, requests
 from . import config as C
 from .utils import log_api, log_warn
@@ -93,15 +97,32 @@ def _classify(http_status, body):
             "numeric": ec,
         }
 
+    # ---- TEXT-FIRST: usage-limit toàn cục (ĐỎ + blacklist) trược already-self (XANH) ----
+    if _contains_any(low, C.USAGE_LIMIT_TEXT):
+        return {
+            "status": "failure",
+            "kind": "usage_limit",
+            "reason": text or "Code đã đạt giới hạn sử dụng toàn cục (usage limit).",
+            "numeric": ec,
+        }
+    if _contains_any(low, C.ALREADY_SELF_TEXT):
+        return {
+            "status": "already",
+            "kind": "already_redeemed",
+            "reason": text or "ID này đã redeem code này trước đó (already).",
+            "numeric": ec,
+        }
+
     if ec is not None:
         if ec in C.NUM_SUCCESS:
             return {"status": "success", "reason": text or "Thành công", "numeric": ec}
 
-        if ec in C.NUM_ALREADY:
+        # 2117/2121 text không rõ -> MẶC ĐỊNH usage-limit (bằng chứng runtime 05/11/2026).
+        if ec in C.NUM_USAGE_LIMIT:
             return {
-                "status": "already",
-                "kind": "already_redeemed",
-                "reason": text or "Code đã được redeem trước đó cho ID này (2117/2121).",
+                "status": "failure",
+                "kind": "usage_limit",
+                "reason": text or "Code đã hết lượt nhập toàn cục (2117/2121 mặc định usage).",
                 "numeric": ec,
             }
 
@@ -117,7 +138,7 @@ def _classify(http_status, body):
             return {
                 "status": "failure",
                 "kind": "id_error",
-                "reason": text or "ID nhân vật lỗi/offline/khong tim thay.",
+                "reason": text or "ID nhân vật lỗi/offline/không tìm thấy.",
                 "numeric": ec,
             }
 
@@ -146,14 +167,6 @@ def _classify(http_status, body):
 
     if _contains_any(low, C.CAPTCHA_HINTS):
         return {"status": "captcha", "reason": text or "Captcha"}
-
-    if _contains_any(low, C.FAIL_ALREADY) or _contains_any(low, C.FAIL_USAGE):
-        return {
-            "status": "already",
-            "kind": "already_redeemed",
-            "reason": text or "Code đã redeem trước đó / hết lượt cho ID này.",
-            "numeric": ec,
-        }
 
     if _contains_any(low, C.FAIL_NOTEXIST):
         return {
@@ -202,7 +215,7 @@ def redeem_via_api(code, uid):
     try:
         r = requests.post(C.API_URL, json=payload, headers=_headers(), timeout=20)
     except Exception as e:
-        log_warn("API redeem loi mang:", e.__class__.__name__)
+        log_warn("API redeem lỗi mạng:", e.__class__.__name__)
         return {"status": "retry", "reason": f"network {e.__class__.__name__}"}
 
     try:
