@@ -1,14 +1,14 @@
-# Discord webhook = COMPONENTS V2 THUAN TUOI (KHONG embed V1).
-# Docs KB xac nhan:
-#   (1) flags=32768 (IS_COMPONENTS_V2) -> tat content/embeds top-level;
-#   (2) webhook BAT BUOC ?with_components=true;
+# Discord webhook = COMPONENTS V2 THUẦN TUỲ (KHÔNG embed V1).
+# Docs KB xác nhận:
+#   (1) flags=32768 (IS_COMPONENTS_V2) -> tắt content/embeds top-level;
+#   (2) webhook BẮT BUỘC ?with_components=true;
 #   (3) Container(17) allowed children = TextDisplay/Separator/Section/MediaGallery/ActionRow/File;
-#       max 10 component/container (ta dung 3); TextDisplay content <=4000 ky tu; MediaGallery
-#       items <=10. accent_color = spine trai (chi bao mau chinh thuc).
-# KHONG con emoji vuong prefix: accent_color da la chi bao mau.
-# Title rong -> LINK THUAN '[Xem video](url)', khong bia 'Ma <code>'.
-# msg_already cho 2117/2121: khong phai loi, khong spam do.
-# src_label THEM "POST" = bai dang Community (tab /posts).
+#       max 10 component/container (ta dùng 3); TextDisplay content <=4000 ký tự; MediaGallery
+#       items <=10. accent_color = spine trái (chỉ báo màu chính thức).
+# KHÔNG còn emoji vuông prefix: accent_color đã là chỉ báo màu.
+# Title rỗng -> LINK THUẦN "[Xem video](url)", không bịa "Mã <code>".
+# msg_already (XANH) = ID này đã nhận, code còn hạn. msg_usage_limit (ĐỎ) = code hết lượt
+#   toàn cục -> bot ngừng thử ID khác. src_label thêm "POST" = bài đăng Community (tab /posts).
 import os, json, requests
 from datetime import datetime, timezone, timedelta
 from . import config as C
@@ -78,7 +78,7 @@ def _with_components(url):
 def send(payload):
     url = os.getenv("DISCORD_WEBHOOK")
     if not url:
-        log_hook("Bo qua webhook (chua set DISCORD_WEBHOOK)")
+        log_hook("Bỏ qua webhook (chưa set DISCORD_WEBHOOK)")
         return
     if isinstance(payload, tuple):
         full, flat = payload
@@ -89,7 +89,7 @@ def send(payload):
         r = requests.post(target, json=full, timeout=15)
         if r.status_code < 400:
             return
-        log_err("V2 bi tu choi http", r.status_code,
+        log_err("V2 bị từ chối http", r.status_code,
                 "| Discord:", (r.text or "")[:300],
                 "| payload:", json.dumps(full, ensure_ascii=False)[:500])
         if flat is not None:
@@ -98,12 +98,12 @@ def send(payload):
                 flat_payload["allowed_mentions"] = full["allowed_mentions"]
             r2 = requests.post(target, json=flat_payload, timeout=15)
             if r2.status_code >= 400:
-                log_err("V2 phang cung bi tu choi http", r2.status_code,
+                log_err("V2 phẳng cũng bị từ chối http", r2.status_code,
                         "| Discord:", (r2.text or "")[:300])
             else:
-                log_hook("Da gui ban V2 phang (chi chu, khong anh)")
+                log_hook("Đã gửi bản V2 phẳng (chỉ chữ, không ảnh)")
     except Exception as e:
-        log_err("Loi khi gui webhook:", e)
+        log_err("Lỗi khi gửi webhook:", e)
 
 
 def msg_success(code, uid):
@@ -117,6 +117,15 @@ def msg_already(code, uid, reason=""):
     if reason:
         lines.append(f'Lí do: "{reason}"')
     return _container(lines, C_ALREADY)
+
+
+def msg_usage_limit(code, reason=""):
+    # ĐỎ: code HẾT LƯỢT TOÀN CỤC (usage limit) -> bot ngừng thử cho các ID còn lại.
+    lines = ["**❌ Code đã hết lượt nhập**",
+             f'Code `{code}` đã đạt giới hạn sử dụng toàn cục — bot ngừng thử cho các ID còn lại.']
+    if reason:
+        lines.append(f'Lí do: "{reason}"')
+    return _container(lines, C_FAILURE)
 
 
 def msg_failure(code, uid, reason):
