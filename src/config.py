@@ -1,9 +1,9 @@
-# TOAN BO CAU HINH. Comment = tieng Viet co dau; phan MAY DOC = ASCII nguyen van.
+# TOÀN BỘ CẤU HÌNH. Comment = tiếng Việt có dấu.
 import os, re
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
 
-# ================= API REDEEM (FACT F12) =================
+# ================= API REDEEM (bằng chứng F12) =================
 API_URL = "https://vgrapi-sea.vnggames.com/coordinator/api/v1/code/redeem"
 API_UA  = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36")
@@ -15,17 +15,16 @@ API_PAYLOAD_TEMPLATE = {
     "code":     "{code}",
 }
 
-# ================= TABLE MA SO JSON (LANGUAGE-PROOF) =================
+# ================= BẢNG MÃ SỐ JSON (không phụ thuộc ngôn ngữ) =================
 NUM_SUCCESS    = {1}
 
-# 2117/2121: ID nay DA REDEEM CODE NAY ROI, hoac cham gioi han 1/1 cho cap code|id.
-#   - KHONG phai ma sai.
-#   - KHONG blacklist code.
-#   - CHI dong cap code|id trong state, khong spam that bai do.
-# Bang chung runtime: thu PTWITHYAMINORA 2 lan cho cung 1 ID -> lan 2 tra 2121.
-NUM_ALREADY    = {2117, 2121}
-NUM_USAGE      = {2117, 2121}  # backward compat, van dung nhu already
-
+# 2117/2121: BẰNG CHỨNG RUNTIME 05/11/2026 (bạn quay) trả "Active code: usage limit"
+#   = code HẾT LƯỢT TOÀN CỤC (đăng 5h trước, người ta nhập như điên), KHÔNG phải
+#   "ID này đã nhận". Nên MẶC ĐỊNH là usage-limit (đỏ + blacklist code), trừ khi
+#   message nói rõ "đã nhận/đã redeem bởi ID này" (khi đó mới là already-self, xanh).
+#   already-self giờ suy từ ALREADY_SELF_TEXT, không từ mã số -> NUM_ALREADY để trống.
+NUM_ALREADY    = set()
+NUM_USAGE_LIMIT = {2117, 2121}          # mặc định = hết lượt toàn cục (đỏ + blacklist)
 NUM_CODE_BAD   = {2106, 2102}
 NUM_ID_ERROR   = {2105}
 NUM_NEED_LOGIN = {2101}
@@ -33,7 +32,7 @@ NUM_TRANSIENT  = {1000, 1001, 2103}
 NUM_VALIDATION = {1002}
 HTTP_STUCK = {403, 404, 408, 425, 429, 500, 501, 502, 503, 504}
 
-# ================= MATCHER UI (chi khi USE_API=0) =================
+# ================= MATCHER UI (chỉ khi USE_API=0) =================
 PH_CODE = ["Nhập thông tin code", "Nhập mã giftcode"]
 PH_ID   = ["Chọn nhân vật / Nhập ID nhân vật", "Nhập ID nhân vật"]
 BTN_REDEEM = re.compile(r"Nhập\s*code|Redeem", re.I)
@@ -44,20 +43,23 @@ RATIO_OK   = "1/1"
 SRV_PH = ["Máy chủ", "Chọn máy chủ", "Server"]
 SRV_OPT_RE = re.compile(r"Server\s*2|Máy chủ\s*2", re.I)
 
-# ================= TABLE TEXT = CHUOI KHOP MESSAGE SERVER (KHONG DICH) =================
+# ================= BẢNG TEXT = CHUỖI KHỚP MESSAGE SERVER (KHÔNG DỊCH) =================
 TRANSIENT       = ["đã có lỗi xảy ra", "thử lại sau ít phút", "không tìm thấy dữ liệu yêu cầu",
                    "không thể tải thông tin game", "vui lòng thử lại sau"]
 NEED_LOGIN      = ["chưa liên kết tài khoản game", "liên kết tài khoản rồi thử lại"]
 
-# 2117/2121 thuong di kem chuoi nay. Van de bi coi la ALREADY, khong phai FAIL.
-FAIL_ALREADY    = ["đã redeem", "đã nhận", "vượt quá số lần nhập", "hết lượt nhập",
-                   "usage limit", "active code: user code management quantity exhausted",
-                   "quantity exhausted", "already redeemed", "already claimed"]
+# USAGE-LIMIT TOÀN CỤC -> EMBED ĐỎ + BLACKLIST CODE (mọi ID kế bỏ qua).
+#   Khớp "Active code: usage limit" (bằng chứng runtime) và các biến thể hết lượt.
+USAGE_LIMIT_TEXT = ["usage limit", "hết lượt nhập", "đã đạt đến giới hạn sử dụng",
+                    "giới hạn sử dụng", "vượt quá số lần nhập", "quantity exhausted",
+                    "user code management quantity exhausted", "active code"]
+# ALREADY-SELF (ID NÀY ĐÃ NHẬN, code còn hạn cho người khác) -> EMBED XANH + ĐÓNG CẶP.
+#   KHÔNG blacklist code (code còn sống, chỉ riêng ID này hết).
+ALREADY_SELF_TEXT = ["đã redeem", "đã nhận", "already redeemed", "already claimed"]
 
-# Giu lai de tuong thich nguc, nhung api_redeemer se uu tien FAIL_ALREADY truoc.
-FAIL_USAGE      = ["hết lượt nhập", "đã đạt đến giới hạn sử dụng", "giới hạn sử dụng",
-                   "vượt quá số lần nhập", "usage limit", "active code"]
-
+# Giữ 2 list cũ cho browser-fallback matcher (redeemer.py) nếu còn tham chiếu.
+FAIL_ALREADY    = ALREADY_SELF_TEXT + USAGE_LIMIT_TEXT   # tương thích ngược
+FAIL_USAGE      = USAGE_LIMIT_TEXT                        # tương thích ngược
 FAIL_NOTEXIST   = ["nhận quà không thành công", "kiểm tra lại mã", "inbox fanpage",
                    "không tồn tại", "vui lòng kiểm tra lại", "code not found"]
 FAIL_IDERROR    = ["không tìm thấy nhân vật", "nhân vật đang offline", "nhập lại id"]
@@ -72,17 +74,10 @@ ID_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
 # ================= YOUTUBE =================
 YT_CHANNEL_ID = "UCnLyxhAWS7yakzX8aWO6PKQ"
 YT_UPLOADS_ID = "UU" + YT_CHANNEL_ID[2:]
-
-# PRODUCTION: 3 video moi nhat co ma text (title/desc) duoc queue+redeem.
 YT_VIDEO_SCAN = 3
-
-# ocr.py _alert doc C.YT_COOLDOWN; truoc day chi ton tai trong main.py -> AttributeError
-#   -> crash giua _alert -> candidate doc duong bi bo, khong nhap. Nay o day.
 YT_COOLDOWN = int(os.getenv("YT_COOLDOWN", "60"))
-
 YT_API_KEY = os.getenv("YT_API_KEY", "").strip()
 DATA_API_PLAYLIST = "https://www.googleapis.com/youtube/v3/playlistItems"
-
 INNERTUBE_BROWSE = "https://www.youtube.com/youtubei/v1/browse"
 INNERTUBE_PUBLIC = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 INNERTUBE_KEY    = (os.getenv("INNERTUBE_KEY", "").strip() or INNERTUBE_PUBLIC)
@@ -94,68 +89,56 @@ YT_CHANNEL_URL    = "https://www.youtube.com/@PlayTogetherVNGofficial/videos"
 YT_CHANNEL_POSTS  = "https://www.youtube.com/@PlayTogetherVNGofficial/posts"
 YT_CHANNEL_AVATAR = os.getenv("YT_CHANNEL_AVATAR", "").strip()
 
-# Overlay badge trong UI card InnerTube -> KHONG phai title that.
 BANNED_TITLE_OVERLAYS = {"đang phát", "phát trực tiếp", "live", "xem tiếp", "mới", "hot"}
-
-# Thu tu xu ly ung vien OCR: newest-first = dao nguoc list bare de video giftcode-moi
-#   lot vao slot OCR thay vi bi trailer/live-cu chim het.
 BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
-
-# Khi title tu InnerTube/DataAPI rong/bi banned -> goi oEmbed (schema co dinh).
-# De 0 = tat hoan toan, chi dung title da parse; van rong -> webhook in "[Xem video](url)".
 OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 
 # ================= COMMUNITY POSTS (tab /posts) =================
-# BANG CHUNG SCHEMA THAT (F12, tab renderer + backstagePostRenderer):
-#   - tab 'Bài đăng' browseEndpoint params = "EgVwb3N0c_IGBAoCSgA%3D" (=%3D -> '=').
+# BẰNG CHỨNG SCHEMA THẬT (F12, tab renderer + backstagePostRenderer):
+#   - tab "Bài đăng" browseEndpoint params = "EgVwb3N0c_IGBAoCSgA%3D" (=%3D -> '=').
 #   - post = sectionListRenderer>itemSectionRenderer>backstagePostThreadRenderer>post>
-#       backstagePostRenderer{ postId, contentText.runs[].text (chua 'MÃ CODE: <MA>'),
-#       backstageAttachment.backstageImageRenderer.image.thumbnails[] (anh post 1600x1600),
-#       command.browseEndpoint.canonicalBaseUrl = '/post/<postId>' }.
-# -> 3 duong lay code post (hedged, duong nao co bang chung truoc):
-#   (1) STRUCT: document GET /posts -> tach ytInitialData -> _walk_posts doc dung
-#       backstagePostRenderer (lay ca text-code + anh-post + link-thang postId).
-#   (2) FLAT: giai \\uXXXX ca HTML, chay thang regex 'MÃ CODE' (luoi khi blob/backstage
-#       doi key; chi ra entries text, khong ra anh/link).
-#   (3) BROWSE FALLBACK: neu document GET bi consent wall (http!=200 / khong co
-#       ytInitialData) -> POST /browse voi INNERTUBE_PARAMS_POSTS (params THAT o tren).
-# Dedupe: video entries di TRUOC post -> post trung code video skip. Post text-code ->
-#   entries (khong ton OCR). Post CHI co anh ma text KHONG ra code -> bare (ung vien OCR,
-#   cung logic video; gate chan neu anh khong chu CODE). Ca 2 chieu -> chi nhap 1 LAN.
+#       backstagePostRenderer{ postId, contentText.runs[].text (chứa "MÃ CODE: <MÃ>"),
+#       backstageAttachment.backstageImageRenderer.image.thumbnails[] (ảnh post 1600x1600),
+#       command.browseEndpoint.canonicalBaseUrl = "/post/<postId>" }.
+# -> 3 đường lấy code post (hedged, đường nào có bằng chứng trước):
+#   (1) STRUCT: document GET /posts -> tách ytInitialData -> _walk_posts đọc đúng
+#       backstagePostRenderer (lấy cả text-code + ảnh-post + link-thẳng postId).
+#   (2) FLAT: giải mã \\uXXXX cả HTML, chạy thẳng regex "MÃ CODE" (lưới khi blob/backstage
+#       đổi key; chỉ ra entries text, không ra ảnh/link).
+#   (3) BROWSE FALLBACK: nếu document GET bị consent wall (http!=200 / không có
+#       ytInitialData) -> POST /browse với INNERTUBE_PARAMS_POSTS (params THẬT ở trên).
+# Dedupe: video entries đi TRƯỚC post -> post trùng code video skip. Post text-code ->
+#   entries (không tốn OCR). Post CHỈ có ảnh mà text KHÔNG ra code -> BỎ QUA (không OCR
+#   ảnh post, tránh lỗi "Mã LIVESTREAM" từ ảnh teaser). Hai chiều -> chỉ nhập 1 LẦN.
 YT_POSTS      = os.getenv("YT_POSTS", "1").strip() != "0"
 YT_POSTS_MAX  = int(os.getenv("YT_POSTS_MAX", "5"))
-
-# Params browse tab posts THAT (decoded primary + encoded backup; _via_posts_browse thu lan luot).
 INNERTUBE_PARAMS_POSTS = [s.strip() for s in
                           (os.getenv("INNERTUBE_PARAMS_POSTS")
                            or "EgVwb3N0c_IGBAoCSgA=,EgVwb3N0c_IGBAoCSgA%3D").split(",")
                           if s.strip()]
-
-# Cookie (ty) cho document GET /posts. MAC DINH RONG. Chi dat khi log FLOUD bao consent wall:
+# Cookie (tuỳ) cho document GET /posts. MẶC ĐỊNH RỖNG. Chỉ đặt khi log FLOUD báo consent wall:
 #   F12 -> Application -> Cookies -> copy VISITOR_INFO1_LIVE + __Secure-ROLLOUT_TOKEN.
 YT_POSTS_COOKIE = os.getenv("YT_POSTS_COOKIE", "").strip()
+YT_POST_LINK = "https://www.youtube.com/post/"   # + postId (bằng chứng canonicalBaseUrl)
 
-# Link thang mot bai dang Community: https://www.youtube.com/post/<postId>
-YT_POST_LINK = "https://www.youtube.com/post/"
-
-# ================= NEO TRICH MA (mot regex dung chung title/desc/OCR) =================
+# ================= NEO TRÍCH MÃ (một regex dùng chung title/desc/OCR) =================
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
 YT_KEYWORD_RE   = re.compile(KEYWORD_PATTERN, re.I)
 CODE_PREFIXES = ["PT"]
 CODE_MIN_LEN  = 6
 
-# ================= OCR: CHUOI GEMINI (uu tien, quay khi 5xx) > EASYOCR > TESSERACT =================
-# GEMINI_MODEL_CHAIN = uu tien, KHONG phai slug that. ocr.py GET /v1beta/models cua CHINH KEY
-#   va chi giu ten NAM TRONG list -> ten khong co bi BO + log (khong doan mu, khong 404 lap).
-#   GEMINI_MODEL (neu dat) duoc PREPEND de ghi de tam. Doi thu tu/them ten = sua env, khong code.
-# TRAN GOI: GEMINI_MAX_CALLS = tran MỖI VÒNG LẶP (reset_gemini_budget() goi tu main.py dau
-#   moi vong). Het tran = PENDING MEM, KHONG dead_key. dead_key chi do 402/403/429.
-# NHIEP 5xx: CA chuoi 5xx -> "local tham do" (chi duong tinh, am tinh = pending) + cho
-#   GEMINI_BUSY_BACKOFF_SEC roi Gemini quay lai. 5xx KHONG tinh tien (pricing: chi 200 moi
-#   tinh) -> chi la chong spam, khong phai chong phi.
-# LOCAL_WHEN: "fallback-only" (MAC DINH) = EasyOCR/Tesseract CHI chay khi Gemini THAT SU
-#   khong dung duoc. Mot lan Gemini loi mang ("net") KHONG kich hoat local.
-# OCR_ENGINE: auto = chuoi gemini (neu key co + co it nhat 1 ten trong list) > easy > tess.
+# ================= OCR: CHUỖI GEMINI (ưu tiên, quay khi 5xx) > EASYOCR > TESSERACT =================
+# GEMINI_MODEL_CHAIN = ưu tiên, KHÔNG phải slug thật. ocr.py GET /v1beta/models của CHÍNH KEY
+#   và chỉ giữ tên NẰM TRONG list -> tên không có bị BỎ + log (không đoán mù, không 404 lặp).
+#   GEMINI_MODEL (nếu đặt) được PREPEND để ghi đè tạm. Đổi thứ tự/thêm tên = sửa env, không code.
+# TRẦN GỌI: GEMINI_MAX_CALLS = trần MỖI VÒNG LẶP (reset_gemini_budget() gọi từ main.py đầu
+#   mỗi vòng). Hết trần = PENDING MEM, KHÔNG dead_key. dead_key chỉ do 402/403/429.
+# NHIỆP 5xx: CẢ chuỗi 5xx -> "local thăm dò" (chỉ dương tính, âm tính = pending) + chờ
+#   GEMINI_BUSY_BACKOFF_SEC rồi Gemini quay lại. 5xx KHÔNG tính tiền (pricing: chỉ 200 mới
+#   tính) -> chỉ là chống spam, không phải chống phí.
+# LOCAL_WHEN: "fallback-only" (MẶC ĐỊNH) = EasyOCR/Tesseract CHỈ chạy khi Gemini THẬT SỰ
+#   không dùng được. Một lần Gemini lỗi mạng ("net") KHÔNG kích hoạt local.
+# OCR_ENGINE: auto = chuỗi gemini (nếu key có + có ít nhất 1 tên trong list) > easy > tess.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
 LOCAL_WHEN      = os.getenv("LOCAL_WHEN", "fallback-only").strip().lower()
@@ -167,11 +150,9 @@ GEMINI_MODEL_CHAIN = [s.strip() for s in
                       if s.strip()]
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT  = int(os.getenv("GEMINI_TIMEOUT", "45"))
-GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))            # tran/goi-per-LOOP
+GEMINI_MAX_CALLS = int(os.getenv("GEMINI_MAX_CALLS", "8"))
 GEMINI_BUSY_BACKOFF_SEC = float(os.getenv("GEMINI_BUSY_BACKOFF_SEC", "300"))
 GEMINI_THROTTLE_SEC = float(os.getenv("GEMINI_THROTTLE_SEC", "2.5"))
-
-# PRODUCTION: toi da 3 video PASS-GATE (anh CO chu CODE) duoc OCR sau moi vong.
 OCR_MAX_IMAGES  = int(os.getenv("OCR_MAX_IMAGES", "3"))
 OCR_MAX_TRIES   = int(os.getenv("OCR_MAX_TRIES", "50"))
 OCR_LOOP_BUDGET = int(os.getenv("OCR_LOOP_BUDGET", "180"))
@@ -179,7 +160,7 @@ OCR_ALERT_CAP   = int(os.getenv("OCR_ALERT_CAP", "6"))
 OCR_ALERT_TTL   = 21600
 OCR_PING_USER   = (os.getenv("OCR_PING_USER", "").strip() or "1160199218313564210")
 
-# ================= BROWSER FALLBACK (chi khi USE_API=0) =================
+# ================= BROWSER FALLBACK (chỉ khi USE_API=0) =================
 LOCALE = ("vi-VN", "Asia/Ho_Chi_Minh")
 STORAGE_STATE = None
 MOBILE_VIEWPORT = {"width": 390, "height": 844}
