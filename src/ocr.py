@@ -1,30 +1,23 @@
-# OCR THUMBNAIL + VONG TU SUA CO TRI NHO.
-# 2117/2121 trong _try_code duoc xu ly la ALREADY: dong cap code|id, khong blacklist code,
-# khong spam that bai do. Candidate chi bi blacklist khi that su not_exist (2106/2102).
-# KIEN TRUC OCR = SEMANTIC + REGEX (hedged, bang chung 4 anh F12 22:18-22:19):
-#   Bang chung: hoi Gemini "dau la code toi nhap" tren (a) teaser "BAT MI CODE LIVESTREAM"
-#     -> model tra "khong co ma, phai xem livestream" (KHONG bia); (b) "CO DE CHUNG THANG 11
-#     PTHELLOAUTUMN" -> model tra "PTHELLOAUTUMN" (bo qua tu noi CHUNG/THANG 11). Day la thu
-#     regex khong lam duoc: regex chi nhin mau chuoi, khong hieu nghiep vu "chu CODE trang tri
-#     vs ma redeem that". Nen ta HOI model, khong chi doc chu.
-#   CUNG 1 LAN GOI Gemini (KHONG ton them call -> khong ton phi): prompt yeu cau tra JSON
-#     {"all_text":..., "redeem_code":...}. all_text -> gate keyword + luoi regex (du phong).
-#     redeem_code -> luoi SEMANTIC, weight cao (thang khi ca hai cung ra). Van chay _valid_code
-#     (form PT+>=6) sau semantic -> ma bia-leaked van bi server 2106 + OCR_MAX_TRIES + ping do o
-#     tang duoi (luoi "auto thu tu sua" da co).
-#   Fail-soft: model khong tra hop le JSON -> coi ca response la all_text, chay regex nhu cu
-#     (mat loi ich semantic lan do, KHONG mat tinh nang).
-#   Im-lang-teaser: model chu dinh tra redeem_code=null (JSON parse OK) VA ca hai luoi deu
-#     rong -> done="no_code" (KHONG ping). Chi ping khi model khong hop tac format (parse fail).
-# SUA BUG cu: "Ma LIVESTREAM" (20:01) -> _valid_code chan; "bo sot PTSUPERHERO" (21:48) ->
-#   _codes_fallback (luoi regex cho duong local) + gio day semantic bat thang tu dau.
+# OCR THUMBNAIL + VÒNG TỰ SỬA CÓ TRÍ NHỚ.
+# 2117/2121 = USAGE-LIMIT TOÀN CỤC (bằng chứng 05/11/2026): embed ĐỎ + BLACKLIST code qua
+#   key "|__DEAD__" trong state -> _try_code DỪNG ngay ID đầu gặp usage_limit, không thử
+#   ID khác (tránh spam đỏ + gọi API thừa). already-self ("đã nhận bởi ID này") vẫn XANH +
+#   đóng cặp. Candidate chỉ bị blacklist khi thật sự not_exist (2106/2102).
+# KIẾN TRÚC OCR = SEMANTIC + REGEX (hedged, bằng chứng 4 ảnh F12 22:18-22:19):
+#   Cùng 1 LẦN GỌI Gemini (KHÔNG tốn thêm call -> không tốn phí): prompt yêu cầu trả JSON
+#     {"all_text":..., "redeem_code":...}. all_text -> gate keyword + lưới regex (dự phòng).
+#     redeem_code -> lưới SEMANTIC, weight cao (thắng khi cả hai cùng ra). Vẫn chạy _valid_code
+#     (form PT+>=6) sau semantic -> mã bịa-leaked vẫn bị server 2106 + OCR_MAX_TRIES + ping đỡ.
+#   Fail-soft: model không trả hợp lệ JSON -> coi cả response là all_text, chạy regex như cũ.
+#   Im-lặng-teaser: model chủ định trả redeem_code=null (JSON parse OK) VÀ cả hai lưới đều
+#     rỗng -> done="no_code" (KHÔNG ping). Chỉ ping khi model không hợp tác format (parse fail).
 import os, io, re, time, json, base64, requests
 from collections import Counter
 from . import config as C
 from .parsers import code_from_ocr_text
 from .utils import log_yt, log_warn, log_hook, sleep, rand_ms
 from .state import commit_paths
-from .webhook import send, msg_success, msg_failure, msg_yt_alert, msg_ocr_fail, msg_already
+from .webhook import send, msg_success, msg_failure, msg_yt_alert, msg_ocr_fail, msg_already, msg_usage_limit
 from .api_redeemer import redeem_via_api
 
 DMIN = int(os.getenv("DELAY_MIN", "15000"))
@@ -33,6 +26,7 @@ DMAX = int(os.getenv("DELAY_MAX", "30000"))
 MEM = lambda: os.path.join(os.getcwd(), "ocr_memory.json")
 _BYTES = {}
 _GATE_RECIPES = 2
+DEAD_SUFFIX = "|__DEAD__"
 
 # --- state Gemini per-PROCESS (= per-run) ---
 _READER = None
@@ -46,7 +40,7 @@ _GEMINI_5XX = set()
 _GEMINI_DEAD_MODEL = set()
 _GEMINI_DEAD_KEY = False
 _GEMINI_DEGRADED_UNTIL = 0.0
-# --- ngan sach per-LOOP ---
+# --- ngân sách per-LOOP ---
 _GEMINI_LOOP_BUDGET = 0
 _GEMINI_LOOP_EXHAUSTED = False
 
@@ -56,41 +50,39 @@ RECIPES = [
     (2, "sharp"), (3, "sharp"), (4, "bin"), (5, "gray"),
 ]
 
-# PROMPT SEMANTIC (bang chung 4 anh): model vua LIET KE (chong bia: chi ghi chu THUC SU thay)
-#   vua TU PHAN "dau la ma redeem" (semantic, bo hardcode tu noi cua regex). FEW-SHOT lay
-#   CHINH 2 case ban vua quay (LIVESTREAM->null, PTHELLOAUTUMN->ma) -> bang chung noi tai,
-#   khong doan. TRA 1 JSON duy nhat de CUNG 1 lan goi vua co all_text (regex/gate) vua co
-#   redeem_code (semantic). Quy tac chong hallucination nam trong prompt + _valid_code o tang
-#   goi + server 2106 o tang duoi (3 lop, khong tin tuong tuyet doi vao model).
+# PROMPT SEMANTIC (bằng chứng 4 ảnh): model vừa LIỆT KÊ (chống bịa: chỉ ghi chữ THỰC SỰ thấy)
+#   vừa TỰ PHÂN "đâu là mã redeem" (semantic, bỏ hardcode từ nối của regex). FEW-SHOT lấy
+#   CHÍNH 2 case bạn vừa quay (LIVESTREAM->null, PTHELLOAUTUMN->mã) -> bằng chứng nội tại.
+#   TRA 1 JSON duy nhất để CÙNG 1 lần gọi vừa có all_text (regex/gate) vừa có redeem_code.
 _GEMINI_PROMPT = (
-    "Ban la bo phan trich MA REDEEM tu anh thumbnail game Play Together (VNG). "
-    "Anh co the la: (A) MOT thong bao su kien/teaser KHONG chua ma (chi co chu nhu 'CODE', "
-    "'LIVESTREAM', 'BAT MI CODE', 'CO DE CHUNG', ten su kien, ngay thang...), hoac "
-    "(B) CO chua MA REDEEM that (chuoi viet hoa, khong dau, thuong bat dau 'PT', nam sau cum "
-    "'CODE'/'MA CODE' hoac trong khung noi bat). "
-    "TRA VE DUY NHAT MOT object JSON hop le, khong markdown, khong van ban ngoai JSON: "
-    '{"all_text": "<moi chu NHIN THAY trong anh, giu nguyen dau tieng Viet, noi cach bang space>", '
-    '"redeem_code": "<MA REDEEM that neu thay ro, viet hoa khong dau>"} hoac '
+    "Bạn là bộ phận trích MÃ REDEEM từ ảnh thumbnail game Play Together (VNG). "
+    "Ảnh có thể là: (A) MỘT thông báo sự kiện/teaser KHÔNG chứa mã (chỉ có chữ như 'CODE', "
+    "'LIVESTREAM', 'BẬT MÍ CODE', 'CÔ DÉ CHUNG', tên sự kiện, ngày tháng...), hoặc "
+    "(B) CÓ chứa MÃ REDEEM thật (chuỗi viết hoa, không dấu, thường bắt đầu 'PT', nằm sau cum "
+    "'CODE'/'MA CODE' hoặc trong khung nổi bật). "
+    "TRA VỀ DUY NHẤT MỘT object JSON hợp lệ, không markdown, không văn bản ngoài JSON: "
+    '{"all_text": "<mọi chữ NHÌN THAY trong ảnh, giữ nguyên dấu tiếng Việt, nối cách bằng space>", '
+    '"redeem_code": "<MÃ REDEEM thật nếu thấy rõ, viết hoa không dấu>"} hoặc '
     '{"all_text": "...", "redeem_code": null}. '
-    "Quy tac bat buoc cho redeem_code: "
-    "(1) Chi lay chuoi ma THUC SU nhin thay trong anh; TUYET DOI khong bia, khong suy doan, "
-    "khong 'don' ma tu ten su kien. "
-    "(2) Neu anh chi la teaser/thong bao su kien MA KHONG co chuoi ma nao -> redeem_code = null. "
-    "(3) KHONG lay cac tu nhu LIVESTREAM, HALLOWEEN, CODE, CHUNG, RIENG, MOI, TANG, THANG, "
-    "ten nhan vat, hashtag (#...) lam ma. "
-    "(4) Ma that thuong: viet hoa, khong dau, >= 6 ky tu, da phan bat dau 'PT'. "
-    "VI DU (hay hoc theo): anh 'DEM HOI HALLOWEEN / BAT MI / CODE / LIVESTREAM' -> "
-    'redeem_code = null. anh "CO DE CHUNG / THANG 11 / PTHELLOAUTUMN" -> '
+    "Quy tắc bắt buộc cho redeem_code: "
+    "(1) Chỉ lấy chuỗi mà THỰC SỰ nhìn thấy trong ảnh; TUYỆT ĐỐI không bịa, không suy đoán, "
+    "không 'đoán' mã từ tên sự kiện. "
+    "(2) Nếu ảnh chỉ là teaser/thông báo sự kiện MÀ KHÔNG có chuỗi mã nào -> redeem_code = null. "
+    "(3) KHÔNG lấy các từ như LIVESTREAM, HALLOWEEN, CODE, CHUNG, RIÊNG, MỚI, TẶNG, THÁNG, "
+    "tên nhân vật, hashtag (#...) làm mã. "
+    "(4) Mã thật thường: viết hoa, không dấu, >= 6 ký tự, đa phần bắt đầu 'PT'. "
+    "VÍ DỤ (học theo): ảnh 'ĐÊM HỘI HALLOWEEN / BẬT MÍ / CODE / LIVESTREAM' -> "
+    'redeem_code = null. ảnh "CÔ DÉ CHUNG / THÁNG 11 / PTHELLOAUTUMN" -> '
     'redeem_code = "PTHELLOAUTUMN".'
 )
 
 
-# ================= Hau kiem MA (luoi form, van dung sau semantic) =================
+# ================= HẬU KIỂM MÃ (lưới form, vẫn dùng sau semantic) =================
 def _valid_code(c):
-    """Chi chap nhan token dang MA THAT ve FORM: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
-       ASCII chu/sso thuong. Chan 'LIVESTREAM','CHUNG','HAPPENING'... KHONG phai ma.
-       Doi dau ma = sua config.CODE_PREFIXES. (Luoi nay KHONG chong duoc ma PT-bia; ma
-       PT-bia do server 2106 + OCR_MAX_TRIES + ping do o tang duoi.)"""
+    """Chỉ chấp nhận token dạng MÃ THẬT về FORM: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
+       ASCII chữ/số thường. Chặn 'LIVESTREAM','CHUNG','HAPPENING'... KHÔNG phải mã.
+       Đổi đầu mã = sửa config.CODE_PREFIXES. (Lưới này KHÔNG chống được mã PT-bịa; mã
+       PT-bịa do server 2106 + OCR_MAX_TRIES + ping đỡ ở tầng dưới.)"""
     c = (c or "").strip().upper()
     if len(c) < C.CODE_MIN_LEN:
         return False
@@ -99,14 +91,14 @@ def _valid_code(c):
     return bool(re.fullmatch(r"[A-Z0-9]+", c))
 
 
-# ================= LUOI REGEX (du phong cho duong LOCAL khi Gemini chet) =================
+# ================= LƯỚI REGEX (dự phòng cho đường LOCAL khi Gemini chết) =================
 _KW_SUFFIX_WORDS = r"(?:\s+(?:CHUNG|RIÊNG|RIENG|MỚI|MOI|TẶNG|TANG|LIVE|NEW))*"
 _OCR_CODE_FALLBACK_RE = re.compile(
     r"C[OÔ][\s.:|_-]*D[EÉ]" + _KW_SUFFIX_WORDS + r"\s+([A-Z0-9]{6,})", re.I)
 
 
 def _codes_fallback(txt):
-    """Luoi regex: cho phep 0-3 tu noi chen giua keyword va ma. Chi tra token qua _valid_code."""
+    """Lưới regex: cho phép 0-3 từ nối chen giữa keyword và mã. Chỉ trả token qua _valid_code."""
     out = []
     for m in _OCR_CODE_FALLBACK_RE.finditer(txt or ""):
         tok = m.group(1).upper()
@@ -133,7 +125,7 @@ def _gemini_load_models():
         r = requests.get(C.GEMINI_ENDPOINT,
                          params={"key": C.GEMINI_API_KEY, "pageSize": 200}, timeout=20)
     except Exception as e:
-        log_warn("Gemini list loi mang:", e.__class__.__name__)
+        log_warn("Gemini list lỗi mạng:", e.__class__.__name__)
         _GEMINI_LIST_OK = False
         return _GEMINI_LIST
     if r.status_code != 200:
@@ -143,7 +135,7 @@ def _gemini_load_models():
     try:
         j = r.json()
     except Exception:
-        log_warn("Gemini list khong phai JSON")
+        log_warn("Gemini list không phải JSON")
         _GEMINI_LIST_OK = False
         return _GEMINI_LIST
     ids = []
@@ -176,7 +168,7 @@ def _gemini_build_chain():
             prefs.append(b)
     ids = _gemini_load_models()
     if not _GEMINI_LIST_OK:
-        log_warn("OCR gemini: khong lay duoc list model -> bo qua chuoi (KHONG doan slug). -> local auth.")
+        log_warn("OCR gemini: không lấy được list model -> bỏ qua chuỗi (KHÔNG đoán slug). -> local auth.")
         return
     idset = set(ids)
     for p in prefs:
@@ -185,12 +177,12 @@ def _gemini_build_chain():
         else:
             _GEMINI_DROPPED.append(p)
     if _GEMINI_CHAIN:
-        log_yt("OCR gemini chuoi (da validate qua list key): " + " > ".join(_GEMINI_CHAIN)
-               + (f" | bo (khong co voi key): {', '.join(_GEMINI_DROPPED)}" if _GEMINI_DROPPED else ""))
+        log_yt("OCR gemini chuỗi (đã validate qua list key): " + " > ".join(_GEMINI_CHAIN)
+               + (f" | bỏ (không có với key): {', '.join(_GEMINI_DROPPED)}" if _GEMINI_DROPPED else ""))
     else:
-        log_warn("OCR gemini: KHONG ten nao trong chuoi ton tai voi key nay. "
-                 f"List hop le: {', '.join(ids[:15])} -> local auth. "
-                 "(Dat GEMINI_MODEL_CHAIN = id that trong list de bat gemini.)")
+        log_warn("OCR gemini: KHÔNG tên nào trong chuỗi tồn tại với key này. "
+                 f"List hợp lệ: {', '.join(ids[:15])} -> local auth. "
+                 "(Đặt GEMINI_MODEL_CHAIN = id thật trong list để bật gemini.)")
 
 
 def _gemini_busy_window_active():
@@ -216,8 +208,8 @@ def _current_gemini_model():
     if _GEMINI_5XX:
         if _GEMINI_DEGRADED_UNTIL <= time.monotonic():
             _GEMINI_DEGRADED_UNTIL = time.monotonic() + C.GEMINI_BUSY_BACKOFF_SEC
-            log_warn(f"OCR gemini: CA chuoi 5xx (dong) -> cho {int(C.GEMINI_BUSY_BACKOFF_SEC)}s; "
-                     f"in luc do dung EasyOCR THEO CHE DO THAM DO (chi duong tinh, am tinh giu pending).")
+            log_warn(f"OCR gemini: CẢ chuỗi 5xx (đông) -> chờ {int(C.GEMINI_BUSY_BACKOFF_SEC)}s; "
+                     f"trong lúc đó dùng EasyOCR THEO CHẾ ĐỘ THĂM DÒ (chỉ dương tính, âm tính giữ pending).")
         return None, "busy_all"
     return None, "dead_key"
 
@@ -239,18 +231,18 @@ def _gemini_call(png_bytes, rec):
             r = requests.post(url, json=body, params={"key": C.GEMINI_API_KEY},
                               timeout=C.GEMINI_TIMEOUT)
         except Exception as e:
-            log_warn("Gemini loi mang (cuc bo):", e.__class__.__name__)
+            log_warn("Gemini lỗi mạng (cực bộ):", e.__class__.__name__)
             return None, "net"
         sc = r.status_code
         if sc == 200:
             try:
                 j = r.json()
             except Exception:
-                log_warn("Gemini khong phai JSON (cuc bo)")
+                log_warn("Gemini không phải JSON (cực bộ)")
                 return None, "net"
             cands = j.get("candidates") or []
             if not cands:
-                log_warn("Gemini khong tra candidate (safety/rong) -> coi nhu cuc bo")
+                log_warn("Gemini không trả candidate (safety/rỗng) -> coi như cực bộ")
                 return None, "net"
             parts = (cands[0].get("content") or {}).get("parts") or []
             txt = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
@@ -259,36 +251,36 @@ def _gemini_call(png_bytes, rec):
             return ([txt] if txt else []), "ok"
         if sc in (500, 502, 503, 504):
             _GEMINI_5XX.add(model)
-            log_warn(f"Gemini {model} {sc} (dong) -> bay khoi chuoi tam thoi, thu model ke tiep.")
+            log_warn(f"Gemini {model} {sc} (đông) -> bay khỏi chuỗi tạm thời, thử model kế tiếp.")
             sleep(1.5)
             continue
         if sc == 404:
             _GEMINI_DEAD_MODEL.add(model)
-            log_warn(f"Gemini {model} 404 (slug khong goi duoc) -> bo, thu model ke tiep.")
+            log_warn(f"Gemini {model} 404 (slug không gọi được) -> bỏ, thử model kế tiếp.")
             continue
         if sc in (402, 403):
             _GEMINI_DEAD_KEY = True
-            log_warn(f"Gemini {sc}: CO THE do PHI/quyen/region -> KIEM TRA AI Studio. "
-                     f"Dung gemini ca run -> local auth.")
+            log_warn(f"Gemini {sc}: CÓ THỂ do phí/quyền/region -> KIỂM TRA AI Studio. "
+                     f"Dừng gemini cả run -> local auth.")
             return None, "dead_key"
         if sc == 429:
             _GEMINI_DEAD_KEY = True
-            log_warn("Gemini 429: cham quota/rate (free-tier het luot?) -> dung gemini ca run -> local auth.")
+            log_warn("Gemini 429: chạm quota/rate (free-tier hết lượt?) -> dừng gemini cả run -> local auth.")
             return None, "dead_key"
         log_warn("Gemini http", sc, "->", (r.text or "")[:200])
         _GEMINI_DEAD_MODEL.add(model)
         continue
 
 
-# ================= PARSE JSON semantic (fail-soft) =================
+# ================= PARSE JSON SEMANTIC (fail-soft) =================
 def _gemini_parse_answer(txt):
-    """Boc JSON {all_text, redeem_code} tu response Gemini. Chiu ca markdown fence.
-       Tra (all_text, redeem_code|None, parsed_ok). parsed_ok=False = model khong tra
-       hop le JSON -> caller coi ca response la all_text (fail-soft, regex van chay)."""
+    """Bóc JSON {all_text, redeem_code} từ response Gemini. Chịu cả markdown fence.
+       Trả (all_text, redeem_code|None, parsed_ok). parsed_ok=False = model không trả
+       hợp lệ JSON -> caller coi cả response là all_text (fail-soft, regex vẫn chạy)."""
     s = (txt or "").strip()
     if not s:
         return "", None, False
-    if s.startswith("```"):                      # bo ```json ... ``` neu model lo boc
+    if s.startswith("```"):
         nl = s.find("\n")
         if nl != -1:
             s = s[nl + 1:]
@@ -297,7 +289,7 @@ def _gemini_parse_answer(txt):
         s = s.strip()
     st, en = s.find("{"), s.rfind("}")
     if st == -1 or en == -1 or en <= st:
-        return (txt or ""), None, False          # khong co JSON -> fail-soft
+        return (txt or ""), None, False
     try:
         obj = json.loads(s[st:en + 1])
     except Exception:
@@ -307,16 +299,14 @@ def _gemini_parse_answer(txt):
     all_text = str(obj.get("all_text", "") or "")
     rc = obj.get("redeem_code", None)
     code = None if rc is None else (str(rc).strip().upper() or None)
-    if not all_text and code:                    # model chi tra code -> dung no lam all_text
+    if not all_text and code:
         all_text = code
     return all_text, code, True
 
 
 def _absorb_gemini(rec, all_text, sem_code):
-    """Nap ket qua semantic + regex vao reads. Semantic weight 10 (thang khi ca hai cung ra);
-       regex weight 1 (luoi). Tra True neu semantic co nap ma hop le.
-       LUU Y: _valid_code la luoi FORM, khong chong duoc ma PT-bia -> ma PT-bia do server
-       2106 + OCR_MAX_TRIES + ping do o tang duoi (thiet ke 'auto thu tu sua' san co)."""
+    """Nap kết quả semantic + regex vào reads. Semantic weight 10 (thắng khi cả hai cùng ra);
+       regex weight 1 (lưới). Trả True nếu semantic có nap mã hợp lệ."""
     if all_text and all_text.strip():
         rec["raw"] = (rec["raw"] + " | " + all_text.strip().replace("\n", " "))[:900]
     hit = False
@@ -349,7 +339,7 @@ def _gemini_pass(rec):
         pil.save(buf, format="PNG")
         png = buf.getvalue()
     except Exception as e:
-        log_warn("Gemini: khong doc duoc anh goc:", e.__class__.__name__)
+        log_warn("Gemini: không đọc được ảnh gốc:", e.__class__.__name__)
         return
     texts, status = _gemini_call(png, rec)
     if status != "ok" or texts is None:
@@ -358,8 +348,6 @@ def _gemini_pass(rec):
     for txt in texts:
         all_text, sem_code, parsed_ok = _gemini_parse_answer(txt)
         _absorb_gemini(rec, all_text, sem_code)
-        # Model CHU DINH tra null (JSON parse OK) = bang chung anh khong chua ma (teaser).
-        # Ghi de sau nay neu ca hai luoi deu rong -> im lang, KHONG ping rac.
         if parsed_ok and sem_code is None:
             rec["sem_declared_none"] = True
 
@@ -373,10 +361,10 @@ def _easy_reader():
     try:
         import easyocr
         _READER = easyocr.Reader(["en"], gpu=False, verbose=False)
-        log_yt("EasyOCR san sang (fallback local)")
+        log_yt("EasyOCR sẵn sàng (fallback local)")
     except Exception as e:
         _READER_FAILED = True
-        log_warn("EasyOCR khong kha dung -> tesseract:", e.__class__.__name__)
+        log_warn("EasyOCR không khả dụng -> tesseract:", e.__class__.__name__)
         _READER = None
     return _READER
 
@@ -390,7 +378,7 @@ def _ocr_texts_local(img):
             parts = r.readtext(arr, detail=0, paragraph=False) or []
             return [" ".join(str(p) for p in parts)]
         except Exception as e:
-            log_warn("EasyOCR loi anh nay -> tesseract:", e.__class__.__name__)
+            log_warn("EasyOCR lỗi ảnh này -> tesseract:", e.__class__.__name__)
     out = []
     for psm in (6, 11):
         try:
@@ -410,7 +398,7 @@ def load_mem():
     try:
         return json.load(open(fp, encoding="utf-8"))
     except Exception as e:
-        log_warn("ocr_memory hong -> bat dau lai:", e)
+        log_warn("ocr_memory hỏng -> bắt đầu lại:", e)
         return {}
 
 
@@ -481,7 +469,7 @@ def _run_recipe_local(rec, idx):
                 continue
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
-        for c in _codes_fallback(txt):           # luoi regex cho duong LOCAL (khong co semantic)
+        for c in _codes_fallback(txt):
             cnt[c] += 1
             rec["reads"][c] = rec["reads"].get(c, 0) + 1
     rec["recipes_used"].append(idx)
@@ -525,7 +513,7 @@ def _pick(rec):
     pool = [(c, n) for c, n in rec["reads"].items() if c not in rec["tried"]]
     if not pool:
         return None
-    return max(pool, key=lambda cn: (cn[1], len(cn[0])))[0]   # weight 10 semantic thang 1 regex
+    return max(pool, key=lambda cn: (cn[1], len(cn[0])))[0]   # weight 10 semantic thắng 1 regex
 
 
 def _ensure_candidate(rec, authoritative):
@@ -593,7 +581,7 @@ def _resolve_title(entry):
             if real and len(real) >= 8:
                 return real
     except Exception as e:
-        log_warn("oEmbed loi (tra rong -> link thuan):", e.__class__.__name__)
+        log_warn("oEmbed lỗi (trả rỗng -> link thuần):", e.__class__.__name__)
     return ""
 
 
@@ -607,6 +595,9 @@ def _ping(rec, note):
 
 
 def _try_code(code, users, state):
+    # usage_limit toàn cục -> blacklist code qua "|__DEAD__" + DỪNG thử ID còn lại.
+    if f"{code}{DEAD_SUFFIX}" in state:
+        return (0, 0, False, False)
     pending = [u for u in users if f"{code}|{u['id']}" not in state]
     if not pending:
         return (0, 0, False, False)
@@ -629,6 +620,14 @@ def _try_code(code, users, state):
             committed += 1
         elif st == "failure":
             k = r.get("kind", "other")
+            if k == "usage_limit":
+                # HẾT LƯỢT TOÀN CỤC -> đỏ 1 lần + blacklist + ngừng (không thử ID khác).
+                send(msg_usage_limit(code, r.get("reason", "")))
+                state.add(key)
+                state.add(f"{code}{DEAD_SUFFIX}")
+                committed += 1
+                log_warn(f"OCR usage_limit `{code}` -> blacklist, ngừng thử ID khác")
+                break
             if k == "not_exist":
                 ne += 1
             else:
@@ -643,7 +642,7 @@ def _try_code(code, users, state):
 
 def _alert(rec, code, note, redeem_flag):
     if rec["alerts"] >= C.OCR_ALERT_CAP:
-        log_hook(f"OCR alert vuot cap ({C.OCR_ALERT_CAP}) cho {rec['video_id']} -> chi log")
+        log_hook(f"OCR alert vượt cap ({C.OCR_ALERT_CAP}) cho {rec['video_id']} -> chỉ log")
         return
     rec["alerts"] += 1
     if rec.get("sem_hit"):
@@ -683,7 +682,7 @@ def _gc_expired_pending(mem, now):
             mem.pop(vid, None)
             removed += 1
     if removed:
-        log_yt(f"GC: xoa {removed} video pending qua {int(C.OCR_ALERT_TTL/3600)}h -> giai slot")
+        log_yt(f"GC: xoá {removed} video pending quá {int(C.OCR_ALERT_TTL/3600)}h -> giải slot")
     return removed
 
 
@@ -702,7 +701,7 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         if rec.get("done"):
             continue
         if time.monotonic() >= budget_end:
-            log_yt("OCR het budget vong nay -> so video con lai cho vong sau")
+            log_yt("OCR hết budget vòng này -> số video còn lại cho vòng sau")
             break
         g = _gate(rec)
         if g == "pending":
@@ -710,14 +709,14 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 mem.pop(v["video_id"], None)
             else:
                 _hold_pending(rec, now)
-            log_yt(f"OCR[{_engine_label()}]: video {rec['video_id']} GIU PENDING "
-                   f"(gemini busy/het-tran-vong/net) -> cho vong sau, khong no_keyword, khong ping")
+            log_yt(f"OCR[{_engine_label()}]: video {rec['video_id']} GIỮ PENDING "
+                   f"(gemini busy/hết-trần-vòng/net) -> cho vòng sau, không no_keyword, không ping")
             changed = True
             continue
         if g == "fail":
             rec["done"] = "no_keyword"
-            log_yt(f"OCR[{_engine_label()}]: anh khong co chu CODE/CO DE "
-                   f"({rec['video_id']}) -> bo qua, khong ping (khong tinh quota)")
+            log_yt(f"OCR[{_engine_label()}]: ảnh không có chữ CODE/CÔ DÉ "
+                   f"({rec['video_id']}) -> bỏ qua, không ping (không tính quota)")
             changed = True
             continue
         auth = not _gemini_busy_window_active() and not _GEMINI_LOOP_EXHAUSTED
@@ -727,39 +726,38 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
             cand, finalize = _ensure_candidate(rec, auth)
             if cand is None:
-                # Teaser: model CHU DINH tra null (JSON OK) VA ca hai luoi deu rong -> im lang.
                 if rec.get("gemini_done") and rec.get("sem_declared_none") and not rec["reads"]:
                     rec["done"] = "no_code"
-                    log_yt(f"OCR[{_engine_label(rec)}]: Gemini + regex dong thuan anh chi la "
-                           f"thong bao su kien, khong chua ma ({rec['video_id']}) -> bo qua IM LANG, "
-                           f"khong ping rac")
+                    log_yt(f"OCR[{_engine_label(rec)}]: Gemini + regex đồng thuận ảnh chỉ là "
+                           f"thông báo sự kiện, không chứa mã ({rec['video_id']}) -> bỏ qua IM LẶNG, "
+                           f"không ping rác")
                 elif finalize:
                     rec["done"] = "exhausted"
-                    log_warn(f"OCR[{_engine_label(rec)}] co chu CODE nhung khong doc duoc ma "
-                             f"({rec['video_id']}) -> PING nhap tay")
+                    log_warn(f"OCR[{_engine_label(rec)}] có chữ CODE nhưng không đọc được mã "
+                             f"({rec['video_id']}) -> PING nhập tay")
                     _ping(rec, f"Ảnh CÓ chữ CODE nhưng engine {_engine_label(rec)} không đọc được "
                                f"mã chắc chắn.")
                 else:
                     if _hold_pending(rec, now):
                         rec["done"] = "exhausted"
-                        log_warn(f"OCR[{_engine_label(rec)}] cho gemini qua lau ({rec['video_id']}) "
-                                 f"-> PING nhap tay (khong the cho mai)")
-                        _ping(rec, "Đã chờ Gemini qua lâu mà local vẫn không đọc được mã chắc chắn.")
+                        log_warn(f"OCR[{_engine_label(rec)}] chờ gemini quá lâu ({rec['video_id']}) "
+                                 f"-> PING nhập tay (không thể chờ mãi)")
+                        _ping(rec, "Đã chờ Gemini quá lâu mà local vẫn không đọc được mã chắc chắn.")
                     else:
-                        log_yt(f"OCR[{_engine_label(rec)}] local het recipe ma van busy/het-tran -> "
-                               f"GIU PENDING {rec['video_id']} cho vong sau")
+                        log_yt(f"OCR[{_engine_label(rec)}] local hết recipe mà vẫn busy/hết-trần -> "
+                               f"GIỮ PENDING {rec['video_id']} cho vòng sau")
                 changed = True
                 break
             if cand in known:
                 rec["done"] = "dup_with_text"
-                log_yt(f"OCR skip dup: `{cand}` da co tu tieu de/mo ta (tang text lo) "
-                       f"-> bo qua video {rec['video_id']}, khong nhap khong alert")
+                log_yt(f"OCR skip dup: `{cand}` đã có từ tiêu đề/mô tả (tầng text lộ) "
+                       f"-> bỏ qua video {rec['video_id']}, không nhập không alert")
                 changed = True
                 break
             rec["tries"] += 1
             note = (f"Lần thử #{rec['tries']}/{C.OCR_MAX_TRIES} · engine={_engine_label(rec)} · "
                     f"đã loại: {rec['tried'] or 'chưa có'}")
-            log_yt(f"OCR[{_engine_label(rec)}] thu #{rec['tries']}: `{cand}` "
+            log_yt(f"OCR[{_engine_label(rec)}] thử #{rec['tries']}: `{cand}` "
                    f"(video {rec['video_id']}) [quota {deep_used}/{C.OCR_MAX_IMAGES}]")
             _alert(rec, cand, note, True)
             changed = True
@@ -774,7 +772,7 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 changed = True
                 continue
             if stuck and ne == 0 and remaining == pending:
-                log_warn(f"OCR stuck o `{cand}` (captcha/ket) -> de vong sau tiep")
+                log_warn(f"OCR stuck ở `{cand}` (captcha/kẹt) -> để vòng sau tiếp")
                 break
             rec["done"] = "committed"
             changed = True
@@ -782,8 +780,8 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         else:
             if rec["tries"] >= C.OCR_MAX_TRIES and not rec.get("done"):
                 rec["done"] = "exhausted"
-                log_warn(f"OCR[{_engine_label(rec)}] dat gioi han {C.OCR_MAX_TRIES} luot cho "
-                         f"{rec['video_id']} ma van bi tu choi -> PING nhap tay")
+                log_warn(f"OCR[{_engine_label(rec)}] đạt giới hạn {C.OCR_MAX_TRIES} lượt cho "
+                         f"{rec['video_id']} mà vẫn bị từ chối -> PING nhập tay")
                 _ping(rec, f"Đã thử đủ {C.OCR_MAX_TRIES} lượt (engine {_engine_label(rec)}) mà "
                            f"mọi mã đọc được đều bị server từ chối.")
                 changed = True
@@ -808,7 +806,7 @@ def alert_only(bare_videos, known_codes=None):
         if g == "pending":
             if _rec_untouched(rec):
                 mem.pop(v["video_id"], None)
-            log_yt(f"OCR(alert)[{_engine_label()}] GIU PENDING {rec['video_id']} cho vong sau")
+            log_yt(f"OCR(alert)[{_engine_label()}] GIỮ PENDING {rec['video_id']} cho vòng sau")
             changed = True
             continue
         if g == "fail":
@@ -822,12 +820,12 @@ def alert_only(bare_videos, known_codes=None):
         cand, _fin = _ensure_candidate(rec, auth)
         if cand is None and rec.get("gemini_done") and rec.get("sem_declared_none") and not rec["reads"]:
             rec["done"] = "no_code"
-            log_yt(f"OCR(alert): teaser khong chua ma ({rec['video_id']}) -> bo qua IM LANG")
+            log_yt(f"OCR(alert): teaser không chứa mã ({rec['video_id']}) -> bỏ qua IM LẶNG")
             changed = True
             continue
         if cand and cand in known:
             rec["done"] = "dup_with_text"
-            log_yt(f"OCR(alert) skip dup: `{cand}` da co tu tang text -> bo qua {rec['video_id']}")
+            log_yt(f"OCR(alert) skip dup: `{cand}` đã có từ tầng text -> bỏ qua {rec['video_id']}")
             changed = True
             continue
         _alert(rec, cand or "(chưa đọc được mã)",
