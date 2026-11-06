@@ -1,17 +1,12 @@
-# NGUON MA CHO VN = API (Data API v3 + InnerTube videos) + COMMUNITY POSTS (tab /posts).
-# TRA VE (entries, bare): entries = video CO ma text (TITLE/DESC) + POST CO ma text;
-#   bare = video upload KHONG co ma text nhung CO thumbnail = UNG VIEN OCR.
-# SUA BUG "Ma LIVESTREAM" (screenshot 20:01): OCR thumbnail teaser bi lay tu su kien
-#   (LIVESTREAM) lam ma. Fix ocr.py (_valid_code hau kiem prefix PT). RIENG POST:
-#   "dung cho OCR vao post" -> _walk_posts KHONG con day anh post vao bare. Post chi lay
-#   code tu contentText (text plain, deterministic); text khong co MÃ CODE: PT... -> BO QUA
-#   post do, khong OCR anh post (anh post cung mac loi "BAT MI CODE" nhu thumbnail video).
-# COMMUNITY POSTS (schema THAT, bang chung F12 backstagePostRenderer): 3 duong hedged
-#   (1) STRUCT _walk_posts doc dung postId/contentText/backstageImageRenderer -> entries
-#       (link thang /post/<postId> + anh post de LEN ALERT, khong de OCR).
-#   (2) FLAT regex 'MÃ CODE' tren HTML da giai \\uXXXX -> luoi entries text.
-#   (3) BROWSE FALLBACK INNERTUBE_PARAMS_POSTS (params THAT) khi document GET consent wall.
-# Dedupe video-truoc-post-sau: final = video_cut(3) + post_keep, post trung code video skip.
+# NGUỒN MÃ CHO VN = API (Data API v3 + InnerTube videos) + COMMUNITY POSTS (tab /posts).
+# TRẢ VỀ (entries, bare): entries = video CÓ mã text (TITLE/DESC) + POST CÓ mã text;
+#   bare = video upload KHÔNG có mã text nhưng CÓ thumbnail = ỨNG VIÊN OCR.
+# COMMUNITY POSTS (schema THẬT, bằng chứng F12 backstagePostRenderer): 3 đường hedged
+#   (1) STRUCT _walk_posts đọc đúng postId/contentText/backstageImageRenderer -> entries
+#       (link thẳng /post/<postId> + ảnh post để LÊN ALERT, không để OCR).
+#   (2) FLAT regex 'MÃ CODE' trên HTML đã giải mã \\uXXXX -> lưới entries text.
+#   (3) BROWSE FALLBACK INNERTUBE_PARAMS_POSTS (params THẬT) khi document GET consent wall.
+# Dedupe video-trước-post-sau: final = video_cut(3) + post_keep, post trùng code video skip.
 import os, re, json, requests
 from . import config as C
 from .parsers import code_sau_keyword_yt, code_from_desc_text
@@ -25,9 +20,9 @@ _VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _IMG_HOSTS = ("ytimg.com", "googleusercontent.com", "ggpht.com")
 _AV_TOKEN = re.compile(r"=s\d+-c\b")
 
-# Neo post: "MÃ CODE" / "MA CODE" (5 dau A + a/A) -> token ASCII >=6. Cho pheo toi da 8 ky tu
-#   khong phai chu/sso (quote, backslash, space, dash...) de khop ca dang escaped trong HTML JS
-#   sau khi giai \\uXXXX. Hau kiem prefix PT/min-len chan 'CHUNG' tu 'CODE CHUNG HALLOWEEN'.
+# Neo post: "MÃ CODE" / "MA CODE" (5 dấu A + a/A) -> token ASCII >=6. Cho phép tối đa 8 ký tự
+#   không phải chữ/số (quote, backslash, space, dash...) để khớp cả dạng escaped trong HTML JS
+#   sau khi giải mã \\uXXXX. Hậu kiểm prefix PT/min-len chặn 'CHUNG' từ 'CODE CHUNG HALLOWEEN'.
 _POST_CODE_RE = re.compile(
     r"M[ÀÁẢÃẠaàáảãạ]\s*CODE\s*[:\-–]?\s*[^A-Za-z0-9]{0,8}([A-Za-z0-9]{6,})", re.I)
 
@@ -198,7 +193,7 @@ def _via_data_api():
             "part": "snippet", "playlistId": C.YT_UPLOADS_ID,
             "maxResults": max(15, C.YT_VIDEO_SCAN * 5), "key": C.YT_API_KEY}, timeout=20)
     except Exception as e:
-        log_yt("DataAPI loi mang:", e.__class__.__name__, e)
+        log_yt("DataAPI lỗi mạng:", e.__class__.__name__, e)
         return [], [], ""
     if r.status_code != 200:
         log_yt("DataAPI http", r.status_code, "->", (r.text or "")[:200])
@@ -206,7 +201,7 @@ def _via_data_api():
     try:
         j = r.json()
     except Exception:
-        log_yt("DataAPI khong phai JSON")
+        log_yt("DataAPI không phải JSON")
         return [], [], ""
     entries, bare = [], []
     for i, it in enumerate(j.get("items") or []):
@@ -237,7 +232,7 @@ def _via_data_api():
 
 def _via_innertube():
     if not C.INNERTUBE_KEY:
-        log_warn("InnerTube: khong co key -> BO QUA tang B.")
+        log_warn("InnerTube: không có key -> BỎ QUA tầng B.")
         return None, [], ""
     body = {"context": {"client": {"clientName": "WEB", "clientVersion": C.INNERTUBE_VERSION,
                                     "hl": "vi", "gl": "VN", "platform": "DESKTOP"}},
@@ -246,10 +241,10 @@ def _via_innertube():
         r = requests.post(C.INNERTUBE_BROWSE, params={"key": C.INNERTUBE_KEY, "prettyPrint": "false"},
                           json=body, headers={**_HDR, "Content-Type": "application/json"}, timeout=20)
     except Exception as e:
-        log_yt("InnerTube loi mang:", e.__class__.__name__, e)
+        log_yt("InnerTube lỗi mạng:", e.__class__.__name__, e)
         return [], [], ""
     txt = r.text or ""
-    log_yt(f"Chuan doan InnerTube: http={r.status_code}, dai={len(txt)}, "
+    log_yt(f"Chẩn đoán InnerTube: http={r.status_code}, dài={len(txt)}, "
            f"videoId={txt.count(chr(34) + 'videoId' + chr(34))}")
     if r.status_code != 200:
         log_yt("   body[:200]=", repr(txt[:200]))
@@ -257,7 +252,7 @@ def _via_innertube():
     try:
         j = r.json()
     except Exception:
-        log_yt("   khong phai JSON; body[:200]=", repr(txt[:200]))
+        log_yt("   không phải JSON; body[:200]=", repr(txt[:200]))
         return [], [], ""
     avatar = _pick_avatar(j)
     st = {"seen": set(), "n": 0, "coded": [], "bare": []}
@@ -266,12 +261,12 @@ def _via_innertube():
                 "video_id": c["video_id"], "video_url": c["video_url"],
                 "thumb_url": c["thumb_url"], "via": "TITLE", "redeem": True, "idx": c["idx"]}
                for c in st["coded"]]
-    log_yt(f"   InnerTube: coded={len(entries)} | bare(ung vien OCR, CHUA xet gate)={len(st['bare'])} "
-           f"| avatar={'CO' if avatar else 'khong'}")
+    log_yt(f"   InnerTube: coded={len(entries)} | bare(ứng viên OCR, CHƯA xét gate)={len(st['bare'])} "
+           f"| avatar={'CÓ' if avatar else 'không'}")
     return entries, st["bare"], avatar
 
 
-# ================= COMMUNITY POSTS (schema THAT: backstagePostRenderer) =================
+# ================= COMMUNITY POSTS (schema THẬT: backstagePostRenderer) =================
 def _post_text(post):
     ct = post.get("contentText") or {}
     runs = ct.get("runs") or []
@@ -279,7 +274,7 @@ def _post_text(post):
 
 
 def _post_image(post):
-    """Anh post chi de LEN ALERT (MediaGallery), KHONG de OCR (sua 'dung cho OCR vao post')."""
+    """Ảnh post chỉ để LÊN ALERT (MediaGallery), KHÔNG để OCR (sửa 'đừng cho OCR vào post')."""
     att = post.get("backstageAttachment") or {}
     bir = att.get("backstageImageRenderer") or {}
     img = bir.get("image") or {}
@@ -315,11 +310,11 @@ def _post_title(text):
 
 
 def _walk_posts(j):
-    """Duyet backstagePostRenderer THAT -> (entries text-code, bare LUON RONG).
-       SUA 'dung cho OCR vao post': post chi lay code tu contentText. Text khong co
-       MÃ CODE: PT... -> BO QUA post (khong day anh post vao bare -> khong OCR anh post,
-       tranh loi 'Ma LIVESTREAM' tu anh teaser). Anh post van duoc giu trong entry de
-       hien MediaGallery khi text CO code."""
+    """Duyệt backstagePostRenderer THẬT -> (entries text-code, bare LUÔN RỖNG).
+       Sửa 'đừng cho OCR vào post': post chỉ lấy code từ contentText. Text không có
+       MÃ CODE: PT... -> BỎ QUA post (không đẩy ảnh post vào bare -> không OCR ảnh post,
+       tránh lỗi 'Mã LIVESTREAM' từ ảnh teaser). Ảnh post vẫn được giữ trong entry để
+       hiện MediaGallery khi text CÓ mã."""
     entries = []
     seen_code = set()
     n = 0
@@ -328,18 +323,18 @@ def _walk_posts(j):
         text = _post_text(post)
         code = _post_code(text)
         if not code:
-            continue                         # <-- text khong code -> bo qua, KHONG OCR anh post
+            continue                         # text không code -> bỏ qua, KHÔNG OCR ảnh post
         if code in seen_code:
             continue
         seen_code.add(code)
-        img = _post_image(post)              # anh chi de alert, khong de OCR
+        img = _post_image(post)              # ảnh chỉ để alert, không để OCR
         link = (C.YT_POST_LINK + pid) if pid else C.YT_CHANNEL_POSTS
         entries.append({"code": code, "title": _post_title(text),
                         "video_id": ("POST-" + pid) if pid else ("POST-" + code),
                         "video_url": link, "thumb_url": img,
                         "via": "POST", "redeem": True, "idx": 100000 + n})
         n += 1
-    return entries, []                       # bare LUON rong voi post
+    return entries, []                       # bare LUÔN rỗng với post
 
 
 def _codes_from_text(s):
@@ -380,7 +375,7 @@ def _parse_posts_html(html):
                             "idx": 150000 + len(entries)})
     diag = ""
     if not entries and not bare:
-        diag = (f"struct={'CO' if struct_ok else 'KHONG'} ytInitialData; flat 0; "
+        diag = (f"struct={'CÓ' if struct_ok else 'KHÔNG'} ytInitialData; flat 0; "
                 f"head={repr((html or '')[:200])}")
     return entries, bare, diag
 
@@ -398,24 +393,24 @@ def _via_posts_browse():
                               json=body, headers={**_HDR, "Content-Type": "application/json"},
                               timeout=20)
         except Exception as e:
-            log_yt("Posts browse loi mang (candidate", prm, "):", e.__class__.__name__)
+            log_yt("Posts browse lỗi mạng (candidate", prm, "):", e.__class__.__name__)
             continue
         if r.status_code != 200:
-            log_yt("Posts browse http", r.status_code, "(candidate", prm, ") -> thu ke")
+            log_yt("Posts browse http", r.status_code, "(candidate", prm, ") -> thử kế")
             continue
         try:
             j = r.json()
         except Exception:
-            log_yt("Posts browse khong phai JSON (candidate", prm, ") -> thu ke")
+            log_yt("Posts browse không phải JSON (candidate", prm, ") -> thử kế")
             continue
         ents, bars = _walk_posts(j)
         if ents or bars:
             log_yt(f"Posts browse: candidate {prm} -> {len(ents)} entries + {len(bars)} bare")
             return ents, bars
-        log_yt("Posts browse candidate", prm, " -> 0 post -> thu ke")
-    log_warn("Posts: document GET fail VA browse (INNERTUBE_PARAMS_POSTS that) cung 0. "
-             "Mo F12 tab Posts -> copy 'params' day du vao env INNERTUBE_PARAMS_POSTS. "
-             "Video/OCR van chay.")
+        log_yt("Posts browse candidate", prm, " -> 0 post -> thử kế")
+    log_warn("Posts: document GET fail VÀ browse (INNERTUBE_PARAMS_POSTS thật) cùng 0. "
+             "Mở F12 tab Posts -> copy 'params' đầy đủ vào env INNERTUBE_PARAMS_POSTS. "
+             "Video/OCR vẫn chạy.")
     return [], []
 
 
@@ -433,11 +428,11 @@ def _via_posts():
             if entries or bare:
                 log_yt(f"Posts: document -> {len(entries)} entries + {len(bare)} bare")
                 return entries, bare
-            log_yt(f"Posts: document {diag} -> 0, thu browse fallback")
+            log_yt(f"Posts: document {diag} -> 0, thử browse fallback")
         else:
-            log_yt(f"Posts document http {r.status_code} -> thu browse fallback")
+            log_yt(f"Posts document http {r.status_code} -> thử browse fallback")
     except Exception as e:
-        log_yt("Posts document loi mang:", e.__class__.__name__)
+        log_yt("Posts document lỗi mạng:", e.__class__.__name__)
     return _via_posts_browse()
 
 
@@ -453,9 +448,9 @@ def get_yt_candidates():
     post_e, post_b = _via_posts()
 
     if not pools_e and not pools_b and not post_e and not post_b:
-        sa = "khong key (BO QUA)" if a_e is None else "chay -> 0"
-        sb = "khong key (BO QUA)" if b_e is None else "chay -> 0"
-        log_yt(f"0 ma. DataAPI: {sa}; InnerTube: {sb}; Posts: 0. (OCR mode={C.OCR_MODE}.)")
+        sa = "không key (BỎ QUA)" if a_e is None else "chạy -> 0"
+        sb = "không key (BỎ QUA)" if b_e is None else "chạy -> 0"
+        log_yt(f"0 mã. DataAPI: {sa}; InnerTube: {sb}; Posts: 0. (OCR mode={C.OCR_MODE}.)")
         return [], []
 
     by_vid = {}
@@ -478,11 +473,11 @@ def get_yt_candidates():
         kept = 0
         for p in post_e:
             if p["code"] in seen:
-                log_yt(f"Posts skip dup: `{p['code']}` da co tu video (tang text lo) "
-                       f"-> bo qua post, khong nhap 2 lan")
+                log_yt(f"Posts skip dup: `{p['code']}` đã có từ video (tầng text lộ) "
+                       f"-> bỏ qua post, không nhập 2 lần")
                 continue
             if kept >= C.YT_POSTS_MAX:
-                log_yt(f"Posts dat cap {C.YT_POSTS_MAX}/vong -> con {len(post_e)-kept} cho vong sau")
+                log_yt(f"Posts đạt cap {C.YT_POSTS_MAX}/vòng -> còn {len(post_e)-kept} cho vòng sau")
                 break
             final.append(p)
             seen.add(p["code"])
@@ -516,20 +511,20 @@ def get_yt_candidates():
     n_post = sum(1 for e in final if e.get("via") == "POST")
     if verbose or not _dumped_once:
         _dumped_once = True
-        log_yt(f"{len(final)} ENTRY CO MA TEXT (video<= {C.YT_VIDEO_SCAN} + post<= {C.YT_POSTS_MAX}; "
+        log_yt(f"{len(final)} ENTRY CÓ MÃ TEXT (video<= {C.YT_VIDEO_SCAN} + post<= {C.YT_POSTS_MAX}; "
                f"post={n_post}):")
         for i, e in enumerate(final, 1):
             tg = [f"via={e.get('via')}"]
             if not e.get("thumb_url"):
                 tg.append("no-thumb")
             log_yt(f"   [{i:2}] {e['title'][:90]} -> `{e['code']}`  [{', '.join(tg)}]")
-        log_yt(f"{len(bare)} UNG VIEN OCR (BARE_ORDER={order}; gate chan neu khong chu CODE; "
-               f"chi PASS gate moi tinh quota {C.OCR_MAX_IMAGES}):")
+        log_yt(f"{len(bare)} ỨNG VIÊN OCR (BARE_ORDER={order}; gate chặn nếu không chữ CODE; "
+               f"chỉ PASS gate mới tính quota {C.OCR_MAX_IMAGES}):")
         for i, c in enumerate(bare[:12], 1):
             log_yt(f"   [{i:2}] {c['title'][:90]}  (video {c['video_id']})")
         if len(bare) > 12:
-            log_yt(f"   ... con {len(bare)-12} nua (khong dump)")
+            log_yt(f"   ... còn {len(bare)-12} nữa (không dump)")
     else:
-        log_yt(f"OK ({len(final)} ma text [video+post={n_post}] + {len(bare)} ung vien OCR "
-               f"choi gate, BARE_ORDER={order})")
+        log_yt(f"OK ({len(final)} mã text [video+post={n_post}] + {len(bare)} ứng viên OCR "
+               f"chơi gate, BARE_ORDER={order})")
     return final, bare
