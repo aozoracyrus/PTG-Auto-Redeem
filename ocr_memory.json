@@ -1070,5 +1070,25 @@
 "sem_hit": false,
 "sem_declared_none": true,
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"YAVnViFKBEI": {
+"video_id": "YAVnViFKBEI",
+"thumb": "https://i.ytimg.com/vi/YAVnViFKBEI/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAzPXMa3gM0CfiO1dLjlXXnoF3XHw",
+"title": "PLAY TOGETHER VNG | REVIEW PHƯƠNG TIỆN BAY \"HỘ VỆ ROBOT CƠ KHÍ\" SỰ KIỆN XÂM LƯỢC NGOÀI HÀNH TINH",
+"video_url": "https://www.youtube.com/watch?v=YAVnViFKBEI",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY TOGETHER VNG REVIEW PHƯƠNG TIỆN HỘ VỆ ROBOT CƠ KHÍ",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.6-flash",
+"sem_hit": false,
+"sem_declared_none": true,
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
