@@ -1,16 +1,13 @@
 # OCR THUMBNAIL + VÒNG TỰ SỬA CÓ TRÍ NHỚ.
-# 2117/2121 = USAGE-LIMIT TOÀN CỤC (bằng chứng 05/11/2026): embed ĐỎ + BLACKLIST code qua
-#   key "|__DEAD__" trong state -> _try_code DỪNG ngay ID đầu gặp usage_limit, không thử
-#   ID khác (tránh spam đỏ + gọi API thừa). already-self ("đã nhận bởi ID này") vẫn XANH +
-#   đóng cặp. Candidate chỉ bị blacklist khi thật sự not_exist (2106/2102).
-# KIẾN TRÚC OCR = SEMANTIC + REGEX (hedged, bằng chứng 4 ảnh F12 22:18-22:19):
-#   Cùng 1 LẦN GỌI Gemini (KHÔNG tốn thêm call -> không tốn phí): prompt yêu cầu trả JSON
-#     {"all_text":..., "redeem_code":...}. all_text -> gate keyword + lưới regex (dự phòng).
-#     redeem_code -> lưới SEMANTIC, weight cao (thắng khi cả hai cùng ra). Vẫn chạy _valid_code
-#     (form PT+>=6) sau semantic -> mã bịa-leaked vẫn bị server 2106 + OCR_MAX_TRIES + ping đỡ.
-#   Fail-soft: model không trả hợp lệ JSON -> coi cả response là all_text, chạy regex như cũ.
-#   Im-lặng-teaser: model chủ định trả redeem_code=null (JSON parse OK) VÀ cả hai lưới đều
-#     rỗng -> done="no_code" (KHÔNG ping). Chỉ ping khi model không hợp tác format (parse fail).
+# 2117/2121 = USAGE-LIMIT TOÀN CỤC: embed ĐỎ + BLACKLIST code qua "|__DEAD__" -> _try_code
+#   DỪNG ngay ID đầu gặp usage_limit, không thử ID khác. already-self vẫn XANH + đóng cặp.
+# KIẾN TRÚC OCR = SEMANTIC + REGEX (hedged, bằng chứng 4 ảnh F12):
+#   Cùng 1 LẦN GỌI Gemini: prompt trả JSON {"all_text":..., "redeem_code":...}.
+#   all_text -> gate keyword + lưới regex. redeem_code -> SEMANTIC weight 10 (thắng regex).
+#   Vẫn chạy _valid_code (form PT+>=6); mã PT-bịa do server 2106 + OCR_MAX_TRIES + ping đỡ.
+#   Fail-soft: không parse được JSON -> coi cả response là all_text, regex vẫn chạy.
+#   Im-lặng-teaser: model chủ định trả null VÀ cả hai lưới rỗng -> done="no_code", KHÔNG ping.
+# DEADLINE: mọi vòng (video / candidate / ID) kiểm tra C.out_of_time() -> không tràn timeout job.
 import os, io, re, time, json, base64, requests
 from collections import Counter
 from . import config as C
@@ -50,18 +47,14 @@ RECIPES = [
     (2, "sharp"), (3, "sharp"), (4, "bin"), (5, "gray"),
 ]
 
-# PROMPT SEMANTIC (bằng chứng 4 ảnh): model vừa LIỆT KÊ (chống bịa: chỉ ghi chữ THỰC SỰ thấy)
-#   vừa TỰ PHÂN "đâu là mã redeem" (semantic, bỏ hardcode từ nối của regex). FEW-SHOT lấy
-#   CHÍNH 2 case bạn vừa quay (LIVESTREAM->null, PTHELLOAUTUMN->mã) -> bằng chứng nội tại.
-#   TRA 1 JSON duy nhất để CÙNG 1 lần gọi vừa có all_text (regex/gate) vừa có redeem_code.
 _GEMINI_PROMPT = (
     "Bạn là bộ phận trích MÃ REDEEM từ ảnh thumbnail game Play Together (VNG). "
     "Ảnh có thể là: (A) MỘT thông báo sự kiện/teaser KHÔNG chứa mã (chỉ có chữ như 'CODE', "
     "'LIVESTREAM', 'BẬT MÍ CODE', 'CÔ DÉ CHUNG', tên sự kiện, ngày tháng...), hoặc "
-    "(B) CÓ chứa MÃ REDEEM thật (chuỗi viết hoa, không dấu, thường bắt đầu 'PT', nằm sau cum "
-    "'CODE'/'MA CODE' hoặc trong khung nổi bật). "
-    "TRA VỀ DUY NHẤT MỘT object JSON hợp lệ, không markdown, không văn bản ngoài JSON: "
-    '{"all_text": "<mọi chữ NHÌN THAY trong ảnh, giữ nguyên dấu tiếng Việt, nối cách bằng space>", '
+    "(B) CÓ chứa MÃ REDEEM thật (chuỗi viết hoa, không dấu, thường bắt đầu 'PT', nằm sau cụm "
+    "'CODE'/'MÃ CODE' hoặc trong khung nổi bật). "
+    "TRẢ VỀ DUY NHẤT MỘT object JSON hợp lệ, không markdown, không văn bản ngoài JSON: "
+    '{"all_text": "<mọi chữ NHÌN THẤY trong ảnh, giữ nguyên dấu tiếng Việt, nối cách bằng space>", '
     '"redeem_code": "<MÃ REDEEM thật nếu thấy rõ, viết hoa không dấu>"} hoặc '
     '{"all_text": "...", "redeem_code": null}. '
     "Quy tắc bắt buộc cho redeem_code: "
@@ -79,10 +72,8 @@ _GEMINI_PROMPT = (
 
 # ================= HẬU KIỂM MÃ (lưới form, vẫn dùng sau semantic) =================
 def _valid_code(c):
-    """Chỉ chấp nhận token dạng MÃ THẬT về FORM: prefix PT (CODE_PREFIXES) + >= CODE_MIN_LEN +
-       ASCII chữ/số thường. Chặn 'LIVESTREAM','CHUNG','HAPPENING'... KHÔNG phải mã.
-       Đổi đầu mã = sửa config.CODE_PREFIXES. (Lưới này KHÔNG chống được mã PT-bịa; mã
-       PT-bịa do server 2106 + OCR_MAX_TRIES + ping đỡ ở tầng dưới.)"""
+    """Chỉ chấp nhận token dạng MÃ THẬT về FORM: prefix PT + >= CODE_MIN_LEN + ASCII chữ/số.
+       Chặn 'LIVESTREAM','CHUNG'... KHÔNG chống được mã PT-bịa (server 2106 đỡ tầng dưới)."""
     c = (c or "").strip().upper()
     if len(c) < C.CODE_MIN_LEN:
         return False
@@ -231,18 +222,18 @@ def _gemini_call(png_bytes, rec):
             r = requests.post(url, json=body, params={"key": C.GEMINI_API_KEY},
                               timeout=C.GEMINI_TIMEOUT)
         except Exception as e:
-            log_warn("Gemini lỗi mạng (cực bộ):", e.__class__.__name__)
+            log_warn("Gemini lỗi mạng (cục bộ):", e.__class__.__name__)
             return None, "net"
         sc = r.status_code
         if sc == 200:
             try:
                 j = r.json()
             except Exception:
-                log_warn("Gemini không phải JSON (cực bộ)")
+                log_warn("Gemini không phải JSON (cục bộ)")
                 return None, "net"
             cands = j.get("candidates") or []
             if not cands:
-                log_warn("Gemini không trả candidate (safety/rỗng) -> coi như cực bộ")
+                log_warn("Gemini không trả candidate (safety/rỗng) -> coi như cục bộ")
                 return None, "net"
             parts = (cands[0].get("content") or {}).get("parts") or []
             txt = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
@@ -274,9 +265,8 @@ def _gemini_call(png_bytes, rec):
 
 # ================= PARSE JSON SEMANTIC (fail-soft) =================
 def _gemini_parse_answer(txt):
-    """Bóc JSON {all_text, redeem_code} từ response Gemini. Chịu cả markdown fence.
-       Trả (all_text, redeem_code|None, parsed_ok). parsed_ok=False = model không trả
-       hợp lệ JSON -> caller coi cả response là all_text (fail-soft, regex vẫn chạy)."""
+    """Bóc JSON {all_text, redeem_code}. Chịu cả markdown fence.
+       Trả (all_text, redeem_code|None, parsed_ok). parsed_ok=False -> fail-soft về regex."""
     s = (txt or "").strip()
     if not s:
         return "", None, False
@@ -305,8 +295,7 @@ def _gemini_parse_answer(txt):
 
 
 def _absorb_gemini(rec, all_text, sem_code):
-    """Nap kết quả semantic + regex vào reads. Semantic weight 10 (thắng khi cả hai cùng ra);
-       regex weight 1 (lưới). Trả True nếu semantic có nap mã hợp lệ."""
+    """Semantic weight 10 (thắng khi cả hai cùng ra); regex weight 1 (lưới)."""
     if all_text and all_text.strip():
         rec["raw"] = (rec["raw"] + " | " + all_text.strip().replace("\n", " "))[:900]
     hit = False
@@ -595,7 +584,7 @@ def _ping(rec, note):
 
 
 def _try_code(code, users, state):
-    # usage_limit toàn cục -> blacklist code qua "|__DEAD__" + DỪNG thử ID còn lại.
+    # usage_limit toàn cục -> blacklist code + DỪNG thử ID còn lại.
     if f"{code}{DEAD_SUFFIX}" in state:
         return (0, 0, False, False)
     pending = [u for u in users if f"{code}|{u['id']}" not in state]
@@ -606,6 +595,11 @@ def _try_code(code, users, state):
     ok = False
     committed = 0
     for u in pending:
+        # DEADLINE: không nhận ID mới khi sắp hết giờ -> không tràn timeout job.
+        if C.out_of_time(C.TASK_RESERVE_SEC):
+            log_yt(f"OCR hết giờ an toàn -> dừng ở mã `{code}`, ID còn lại để run sau")
+            stuck = True
+            break
         r = redeem_via_api(code, u["id"])
         st = r.get("status")
         key = f"{code}|{u['id']}"
@@ -621,7 +615,6 @@ def _try_code(code, users, state):
         elif st == "failure":
             k = r.get("kind", "other")
             if k == "usage_limit":
-                # HẾT LƯỢT TOÀN CỤC -> đỏ 1 lần + blacklist + ngừng (không thử ID khác).
                 send(msg_usage_limit(code, r.get("reason", "")))
                 state.add(key)
                 state.add(f"{code}{DEAD_SUFFIX}")
@@ -636,7 +629,9 @@ def _try_code(code, users, state):
                 committed += 1
         else:
             stuck = True
-        sleep(rand_ms(DMIN, DMAX))
+        left = C.time_left() - C.LOOP_RESERVE_SEC
+        if left > 0:
+            sleep(min(rand_ms(DMIN, DMAX), left))
     return (len(pending) - committed, ne, stuck, ok)
 
 
@@ -700,8 +695,9 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done"):
             continue
-        if time.monotonic() >= budget_end:
-            log_yt("OCR hết budget vòng này -> số video còn lại cho vòng sau")
+        # DEADLINE: hết budget OCR HOẶC hết giờ an toàn của job -> dừng, video còn lại run sau.
+        if time.monotonic() >= budget_end or C.out_of_time(C.LOOP_RESERVE_SEC + 60):
+            log_yt("OCR hết budget vòng này / hết giờ an toàn -> video còn lại cho run sau")
             break
         g = _gate(rec)
         if g == "pending":
@@ -724,6 +720,10 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
             break
         deep_used += 1
         while rec["tries"] < C.OCR_MAX_TRIES and time.monotonic() < budget_end:
+            if C.out_of_time(C.TASK_RESERVE_SEC):
+                log_yt(f"OCR hết giờ an toàn -> GIỮ video {rec['video_id']} cho run sau")
+                changed = True
+                break
             cand, finalize = _ensure_candidate(rec, auth)
             if cand is None:
                 if rec.get("gemini_done") and rec.get("sem_declared_none") and not rec["reads"]:
@@ -750,7 +750,7 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
                 break
             if cand in known:
                 rec["done"] = "dup_with_text"
-                log_yt(f"OCR skip dup: `{cand}` đã có từ tiêu đề/mô tả (tầng text lộ) "
+                log_yt(f"OCR skip dup: `{cand}` đã có từ tiêu đề/mô tả (tầng text lo) "
                        f"-> bỏ qua video {rec['video_id']}, không nhập không alert")
                 changed = True
                 break
@@ -762,6 +762,11 @@ def run_correction(users, state, bare_videos, now, known_codes=None):
             _alert(rec, cand, note, True)
             changed = True
             remaining, ne, stuck, ok = _try_code(cand, users, state)
+            # DEADLINE: vừa nhập xong mà hết giờ -> KHÔNG chốt video, run sau nhập tiếp ID còn lại.
+            if C.out_of_time(C.TASK_RESERVE_SEC):
+                log_yt(f"OCR hết giờ an toàn sau mã `{cand}` -> KHÔNG chốt video, để run sau nhập tiếp")
+                changed = True
+                break
             pending = remaining + ne
             if ok or (remaining == 0 and ne == 0):
                 rec["done"] = "committed"
@@ -802,6 +807,10 @@ def alert_only(bare_videos, known_codes=None):
         rec.setdefault("channel_avatar", v.get("channel_avatar", ""))
         if rec.get("done") or rec.get("alerts"):
             continue
+        # DEADLINE: hết giờ an toàn -> dừng, video còn lại run sau.
+        if C.out_of_time(C.LOOP_RESERVE_SEC + 60):
+            log_yt("OCR(alert) hết giờ an toàn -> video còn lại cho run sau")
+            break
         g = _gate(rec)
         if g == "pending":
             if _rec_untouched(rec):
