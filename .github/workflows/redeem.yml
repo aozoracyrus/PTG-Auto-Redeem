@@ -1,4 +1,4 @@
-name: PTG Auto Redeem VN (API-first + YouTube + Community Posts + OCR chuoi Gemini/EasyOCR)
+name: PTG Auto Redeem VN (API-first + YouTube + Community Posts + OCR chuỗi Gemini/EasyOCR)
 
 on:
   workflow_dispatch: {}
@@ -27,6 +27,14 @@ jobs:
       YT_VERBOSE:       "0"
       DRY_RUN:          "0"
       TEST_CODE:        ""
+
+      # ===== DEADLINE (sửa bug "chạy 6h rồi tự ngắt") =====
+      # JOB_START_EPOCH ghi ở step ĐẦU TIÊN -> main.py tính deadline trừ hao phút cài đặt.
+      JOB_TIMEOUT_MINUTES:  "360"   # phải khớp timeout-minutes ở trên
+      SHUTDOWN_RESERVE_SEC: "180"   # dự phòng commit + push + exit
+      LOOP_RESERVE_SEC:     "90"    # ngưỡng dừng nhận việc mới
+      TASK_RESERVE_SEC:     "45"    # ngưỡng dừng giữa các ID
+      MIN_CHAIN_SEC:        "600"   # run ngắn hơn 10' = crash lặp -> KHÔNG nối chuỗi
 
       OCR_MODE:         "auto"
       OCR_ENGINE:       "auto"
@@ -61,6 +69,10 @@ jobs:
       YT_API_KEY:       ${{ secrets.YT_API_KEY }}
       OCR_PING_USER:    ${{ secrets.OCR_PING_USER }}
     steps:
+      # STEP ĐẦU TIÊN: ghi mốc bắt đầu job (tính cả phút cài đặt vào ngân sách thời gian).
+      - name: Ghi mốc bắt đầu job
+        run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with: { persist-credentials: true }
 
@@ -97,17 +109,21 @@ jobs:
       - name: Fetch camoufox engine
         run: python -m camoufox fetch
 
-      - name: Run loop (API redeem + YouTube + Posts + OCR chuoi Gemini/EasyOCR)
+      - name: Run loop (API redeem + YouTube + Posts + OCR chuỗi Gemini/EasyOCR)
         id: run
         run: python src/main.py
 
-      - name: Trigger next run (self-chain 24/7)
-        if: success()
+      # SỬA BUG CHUỖI ĐỨT: trước đây `if: success()` -> job fail/timeout là KHÔNG spawn run kế.
+      # Nay: !cancelled() = chạy cả khi success LẪN failure; chỉ bỏ qua khi bạn Cancel tay.
+      # chain='0' do main.py ghi khi crash sớm (< MIN_CHAIN_SEC) -> dừng chuỗi có chủ đích.
+      # Nếu job bị giết giữa chừng (không ghi được output) -> chain rỗng != '0' -> VẪN nối chuỗi.
+      - name: Trigger next run (self-chain 24/7, kể cả lỗi tạm thời)
+        if: ${{ !cancelled() && steps.run.outputs.chain != '0' }}
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
-          echo ">> da self-trigger run tiep theo (ref=${GITHUB_REF_NAME:-main})"
+          echo ">> đã self-trigger run kế tiếp (ref=${GITHUB_REF_NAME:-main}, chain='${{ steps.run.outputs.chain }}')"
 
       - name: Upload screenshots on failure
         if: always()
