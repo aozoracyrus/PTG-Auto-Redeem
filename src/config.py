@@ -1,5 +1,5 @@
 # TOÀN BỘ CẤU HÌNH. Comment = tiếng Việt có dấu.
-import os, re
+import os, re, time
 
 URL_VN = "https://giftcode.vnggames.com/vn/redeem/ptg"
 
@@ -18,18 +18,17 @@ API_PAYLOAD_TEMPLATE = {
 # ================= BẢNG MÃ SỐ JSON (không phụ thuộc ngôn ngữ) =================
 NUM_SUCCESS    = {1}
 
-# 2117/2121: BẰNG CHỨNG RUNTIME 05/11/2026 (bạn quay) trả "Active code: usage limit"
+# 2117/2121: BẰNG CHỨNG RUNTIME 05/11/2026 trả "Active code: usage limit"
 #   = code HẾT LƯỢT TOÀN CỤC (đăng 5h trước, người ta nhập như điên), KHÔNG phải
 #   "ID này đã nhận". Nên MẶC ĐỊNH là usage-limit (đỏ + blacklist code), trừ khi
 #   message nói rõ "đã nhận/đã redeem bởi ID này" (khi đó mới là already-self, xanh).
-#   already-self giờ suy từ ALREADY_SELF_TEXT, không từ mã số -> NUM_ALREADY để trống.
-NUM_ALREADY    = set()
-NUM_USAGE_LIMIT = {2117, 2121}          # mặc định = hết lượt toàn cục (đỏ + blacklist)
-NUM_CODE_BAD   = {2106, 2102}
-NUM_ID_ERROR   = {2105}
-NUM_NEED_LOGIN = {2101}
-NUM_TRANSIENT  = {1000, 1001, 2103}
-NUM_VALIDATION = {1002}
+NUM_ALREADY     = set()
+NUM_USAGE_LIMIT = {2117, 2121}
+NUM_CODE_BAD    = {2106, 2102}
+NUM_ID_ERROR    = {2105}
+NUM_NEED_LOGIN  = {2101}
+NUM_TRANSIENT   = {1000, 1001, 2103}
+NUM_VALIDATION  = {1002}
 HTTP_STUCK = {403, 404, 408, 425, 429, 500, 501, 502, 503, 504}
 
 # ================= MATCHER UI (chỉ khi USE_API=0) =================
@@ -49,15 +48,12 @@ TRANSIENT       = ["đã có lỗi xảy ra", "thử lại sau ít phút", "khô
 NEED_LOGIN      = ["chưa liên kết tài khoản game", "liên kết tài khoản rồi thử lại"]
 
 # USAGE-LIMIT TOÀN CỤC -> EMBED ĐỎ + BLACKLIST CODE (mọi ID kế bỏ qua).
-#   Khớp "Active code: usage limit" (bằng chứng runtime) và các biến thể hết lượt.
 USAGE_LIMIT_TEXT = ["usage limit", "hết lượt nhập", "đã đạt đến giới hạn sử dụng",
                     "giới hạn sử dụng", "vượt quá số lần nhập", "quantity exhausted",
                     "user code management quantity exhausted", "active code"]
 # ALREADY-SELF (ID NÀY ĐÃ NHẬN, code còn hạn cho người khác) -> EMBED XANH + ĐÓNG CẶP.
-#   KHÔNG blacklist code (code còn sống, chỉ riêng ID này hết).
 ALREADY_SELF_TEXT = ["đã redeem", "đã nhận", "already redeemed", "already claimed"]
 
-# Giữ 2 list cũ cho browser-fallback matcher (redeemer.py) nếu còn tham chiếu.
 FAIL_ALREADY    = ALREADY_SELF_TEXT + USAGE_LIMIT_TEXT   # tương thích ngược
 FAIL_USAGE      = USAGE_LIMIT_TEXT                        # tương thích ngược
 FAIL_NOTEXIST   = ["nhận quà không thành công", "kiểm tra lại mã", "inbox fanpage",
@@ -100,26 +96,19 @@ OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 #       backstagePostRenderer{ postId, contentText.runs[].text (chứa "MÃ CODE: <MÃ>"),
 #       backstageAttachment.backstageImageRenderer.image.thumbnails[] (ảnh post 1600x1600),
 #       command.browseEndpoint.canonicalBaseUrl = "/post/<postId>" }.
-# -> 3 đường lấy code post (hedged, đường nào có bằng chứng trước):
-#   (1) STRUCT: document GET /posts -> tách ytInitialData -> _walk_posts đọc đúng
-#       backstagePostRenderer (lấy cả text-code + ảnh-post + link-thẳng postId).
-#   (2) FLAT: giải mã \\uXXXX cả HTML, chạy thẳng regex "MÃ CODE" (lưới khi blob/backstage
-#       đổi key; chỉ ra entries text, không ra ảnh/link).
-#   (3) BROWSE FALLBACK: nếu document GET bị consent wall (http!=200 / không có
-#       ytInitialData) -> POST /browse với INNERTUBE_PARAMS_POSTS (params THẬT ở trên).
-# Dedupe: video entries đi TRƯỚC post -> post trùng code video skip. Post text-code ->
-#   entries (không tốn OCR). Post CHỈ có ảnh mà text KHÔNG ra code -> BỎ QUA (không OCR
-#   ảnh post, tránh lỗi "Mã LIVESTREAM" từ ảnh teaser). Hai chiều -> chỉ nhập 1 LẦN.
+# -> 3 đường lấy code post (hedged):
+#   (1) STRUCT: document GET /posts -> tách ytInitialData -> _walk_posts.
+#   (2) FLAT: giải mã \\uXXXX cả HTML, chạy thẳng regex "MÃ CODE".
+#   (3) BROWSE FALLBACK: POST /browse với INNERTUBE_PARAMS_POSTS khi document bị consent wall.
+# Post CHỈ lấy code từ text; ảnh post chỉ để LÊN ALERT, KHÔNG OCR (tránh "Mã LIVESTREAM").
 YT_POSTS      = os.getenv("YT_POSTS", "1").strip() != "0"
 YT_POSTS_MAX  = int(os.getenv("YT_POSTS_MAX", "5"))
 INNERTUBE_PARAMS_POSTS = [s.strip() for s in
                           (os.getenv("INNERTUBE_PARAMS_POSTS")
                            or "EgVwb3N0c_IGBAoCSgA=,EgVwb3N0c_IGBAoCSgA%3D").split(",")
                           if s.strip()]
-# Cookie (tuỳ) cho document GET /posts. MẶC ĐỊNH RỖNG. Chỉ đặt khi log FLOUD báo consent wall:
-#   F12 -> Application -> Cookies -> copy VISITOR_INFO1_LIVE + __Secure-ROLLOUT_TOKEN.
 YT_POSTS_COOKIE = os.getenv("YT_POSTS_COOKIE", "").strip()
-YT_POST_LINK = "https://www.youtube.com/post/"   # + postId (bằng chứng canonicalBaseUrl)
+YT_POST_LINK = "https://www.youtube.com/post/"
 
 # ================= NEO TRÍCH MÃ (một regex dùng chung title/desc/OCR) =================
 KEYWORD_PATTERN = r"C[OÔ][\s.:|_-]*D[EÉ]"
@@ -130,15 +119,11 @@ CODE_MIN_LEN  = 6
 # ================= OCR: CHUỖI GEMINI (ưu tiên, quay khi 5xx) > EASYOCR > TESSERACT =================
 # GEMINI_MODEL_CHAIN = ưu tiên, KHÔNG phải slug thật. ocr.py GET /v1beta/models của CHÍNH KEY
 #   và chỉ giữ tên NẰM TRONG list -> tên không có bị BỎ + log (không đoán mù, không 404 lặp).
-#   GEMINI_MODEL (nếu đặt) được PREPEND để ghi đè tạm. Đổi thứ tự/thêm tên = sửa env, không code.
-# TRẦN GỌI: GEMINI_MAX_CALLS = trần MỖI VÒNG LẶP (reset_gemini_budget() gọi từ main.py đầu
-#   mỗi vòng). Hết trần = PENDING MEM, KHÔNG dead_key. dead_key chỉ do 402/403/429.
-# NHIỆP 5xx: CẢ chuỗi 5xx -> "local thăm dò" (chỉ dương tính, âm tính = pending) + chờ
-#   GEMINI_BUSY_BACKOFF_SEC rồi Gemini quay lại. 5xx KHÔNG tính tiền (pricing: chỉ 200 mới
-#   tính) -> chỉ là chống spam, không phải chống phí.
-# LOCAL_WHEN: "fallback-only" (MẶC ĐỊNH) = EasyOCR/Tesseract CHỈ chạy khi Gemini THẬT SỰ
-#   không dùng được. Một lần Gemini lỗi mạng ("net") KHÔNG kích hoạt local.
-# OCR_ENGINE: auto = chuỗi gemini (nếu key có + có ít nhất 1 tên trong list) > easy > tess.
+# TRẦN GỌI: GEMINI_MAX_CALLS = trần MỖI VÒNG LẶP (reset_gemini_budget() gọi từ main.py).
+#   Hết trần = PENDING MEM, KHÔNG dead_key. dead_key chỉ do 402/403/429.
+# NHIỆP 5xx: CẢ chuỗi 5xx -> local thăm dò + chờ GEMINI_BUSY_BACKOFF_SEC rồi Gemini quay lại.
+#   5xx KHÔNG tính tiền (pricing: chỉ 200 mới tính) -> chỉ là chống spam, không phải chống phí.
+# LOCAL_WHEN: "fallback-only" = EasyOCR/Tesseract CHỈ chạy khi Gemini THẬT SỰ không dùng được.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
 LOCAL_WHEN      = os.getenv("LOCAL_WHEN", "fallback-only").strip().lower()
@@ -166,3 +151,30 @@ STORAGE_STATE = None
 MOBILE_VIEWPORT = {"width": 390, "height": 844}
 MOBILE_UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
+
+# ================= DEADLINE TUYỆT ĐỐI (sửa bug "chạy 6h rồi tự ngắt") =================
+# BUG CŨ: while chỉ kiểm tra MAXRUN ở ĐẦU vòng; một vòng có thể kéo 10-15 phút (mỗi ID
+#   ngủ 15-30s × nhiều mã + OCR 180s + Gemini) -> tràn 345' -> đụng timeout-minutes 360
+#   -> GitHub giết job -> step trigger `if: success()` bị bỏ qua -> CHUỖI ĐỨT.
+# SỬA: deadline tính từ LÚC JOB BẮT ĐẦU (JOB_START_EPOCH do workflow ghi), trừ hao cài đặt;
+#   mọi vòng lặp con kiểm tra deadline TRƯỚC mỗi ID/mã/video và TRƯỚC mỗi lần ngủ.
+JOB_START_EPOCH      = float(os.getenv("JOB_START_EPOCH", "0") or 0)
+JOB_TIMEOUT_MINUTES  = int(os.getenv("JOB_TIMEOUT_MINUTES", "360"))
+SHUTDOWN_RESERVE_SEC = float(os.getenv("SHUTDOWN_RESERVE_SEC", "180"))  # commit+push+exit
+LOOP_RESERVE_SEC     = float(os.getenv("LOOP_RESERVE_SEC", "90"))       # dừng nhận việc mới
+TASK_RESERVE_SEC     = float(os.getenv("TASK_RESERVE_SEC", "45"))       # dừng giữa các ID
+MIN_CHAIN_SEC        = int(os.getenv("MIN_CHAIN_SEC", "600"))           # run ngắn hơn -> KHÔNG nối chuỗi
+
+DEADLINE_EPOCH = 0.0   # main.py đặt lúc khởi động; 0 = chưa đặt (không giới hạn)
+
+
+def time_left():
+    """Số giây còn lại tới deadline. Chưa đặt deadline -> coi như vô hạn."""
+    if DEADLINE_EPOCH <= 0:
+        return 1e9
+    return DEADLINE_EPOCH - time.time()
+
+
+def out_of_time(reserve=0.0):
+    """True nếu thời gian còn lại <= reserve -> phải dừng nhận việc mới."""
+    return time_left() <= reserve
