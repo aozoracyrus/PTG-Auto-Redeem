@@ -1210,5 +1210,25 @@
 "sem_hit": false,
 "sem_declared_none": true,
 "channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
+},
+"Roon4rgiLjw": {
+"video_id": "Roon4rgiLjw",
+"thumb": "https://i.ytimg.com/vi/Roon4rgiLjw/hq720.jpg?sqp=-oaymwE6CNAFEJQDSFXyq4qpAywIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhfIFkoZTAPuALzGA==&rs=AOn4CLA5FW6x5V-ldBp-Gdrt0j9N9il34A",
+"title": "PLAY TOGETHER VNG | \"CÙNG NGHE NHẠC VỚI TỚ NHÉ\" ~ TRANG PHỤC MỚI PLAYLIST CỦA SION",
+"video_url": "https://www.youtube.com/watch?v=Roon4rgiLjw",
+"recipes_used": [],
+"reads": {},
+"raw": " | PLAY TOGETHER VNG TRANG PHỤC MỚI Playlist của Sion",
+"tried": [],
+"tries": 0,
+"alerts": 0,
+"done": "no_keyword",
+"pinged": false,
+"gemini_done": true,
+"pending_since": null,
+"gemini_model": "gemini-3.8-flash",
+"sem_hit": false,
+"sem_declared_none": true,
+"channel_avatar": "https://yt3.googleusercontent.com/7X1atgxpwS78elUDRzLo7W1n4ZwPBaH0s84701Ikjcs0VGwMJ71P6cBQHkIXrVCwqyktLMMHMA=s900-c-k-c0x00ffffff-no-rj"
 }
 }
