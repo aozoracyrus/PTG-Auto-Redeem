@@ -34,7 +34,6 @@ jobs:
       SHUTDOWN_RESERVE_SEC: "180"   # dự phòng commit + push + exit
       LOOP_RESERVE_SEC:     "90"    # ngưỡng dừng nhận việc mới
       TASK_RESERVE_SEC:     "45"    # ngưỡng dừng giữa các ID
-      MIN_CHAIN_SEC:        "600"   # run ngắn hơn 10' = crash lặp -> KHÔNG nối chuỗi
 
       OCR_MODE:         "auto"
       OCR_ENGINE:       "auto"
@@ -113,17 +112,15 @@ jobs:
         id: run
         run: python src/main.py
 
-      # SỬA BUG CHUỖI ĐỨT: trước đây `if: success()` -> job fail/timeout là KHÔNG spawn run kế.
-      # Nay: !cancelled() = chạy cả khi success LẪN failure; chỉ bỏ qua khi bạn Cancel tay.
-      # chain='0' do main.py ghi khi crash sớm (< MIN_CHAIN_SEC) -> dừng chuỗi có chủ đích.
-      # Nếu job bị giết giữa chừng (không ghi được output) -> chain rỗng != '0' -> VẪN nối chuỗi.
+      # SỬA BUG CHUỖI ĐỨT: trigger CHẠY CẢ KHI CÓ LỖI (trừ khi Cancel tay).
+      # !cancelled() = true khi job success HOẶC failure, false chỉ khi bạn Cancel.
       - name: Trigger next run (self-chain 24/7, kể cả lỗi tạm thời)
-        if: ${{ !cancelled() && steps.run.outputs.chain != '0' }}
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
         run: |
           gh workflow run "$WORKFLOW_FILE" --ref "${GITHUB_REF_NAME:-main}"
-          echo ">> đã self-trigger run kế tiếp (ref=${GITHUB_REF_NAME:-main}, chain='${{ steps.run.outputs.chain }}')"
+          echo ">> đã self-trigger run kế tiếp (ref=${GITHUB_REF_NAME:-main})"
 
       - name: Upload screenshots on failure
         if: always()
