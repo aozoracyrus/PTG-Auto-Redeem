@@ -4,10 +4,7 @@
 # SỬA BUG "CHẠY 6H RỒI TỰ NGẮT" (2 tầng):
 #   Tầng 1 (gốc): deadline tuyệt đối = min(start+MAX_RUNTIME, JOB_START+timeout-reserve).
 #     Kiểm tra TRƯỚC mỗi mã, mỗi ID, mỗi lần ngủ -> không tràn timeout-minutes của job.
-#   Tầng 2: ghi output `chain` cho step trigger. Run khoẻ -> chain=1. Crash sớm
-#     (< MIN_CHAIN_SEC) -> chain=0 + exit 2 (dừng chuỗi, chống spam run lỗi).
-#     Workflow dùng `if: !cancelled() && steps.run.outputs.chain != '0'` nên LỖI TẠM THỜI
-#     (kể cả job bị giết, không ghi được output) VẪN nối chuỗi; chỉ Cancel tay mới dừng hẳn.
+#   Tầng 2: trigger luôn chạy trừ khi Cancel tay (workflow dùng !cancelled()).
 #
 # 2117/2121 = usage-limit toàn cục: embed ĐỎ + blacklist code qua "|__DEAD__".
 import os, sys, time
@@ -38,18 +35,6 @@ TEST_CODE    = os.getenv("TEST_CODE", "").strip().upper()
 
 SERVER_FAIL_COMMIT = {"usage_limit", "id_error", "validation", "other", "need_login"}
 DEAD_SUFFIX = "|__DEAD__"
-
-
-def _set_chain(val):
-    """Ghi output cho step trigger. '1' = nối chuỗi, '0' = dừng (crash sớm)."""
-    p = os.getenv("GITHUB_OUTPUT")
-    if not p:
-        return
-    try:
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(f"chain={val}\n")
-    except Exception as e:
-        log_err("Không ghi được GITHUB_OUTPUT:", e)
 
 
 def _nap_ngu(sec):
@@ -282,14 +267,10 @@ def main():
             pass
         elapsed = time.time() - start
         log_loop(f"Kết thúc | thời gian chạy {int(elapsed)}s")
-        # Run quá ngắn = bất thường (crash lặp) -> KHÔNG nối chuỗi, tránh spam run lỗi.
-        if elapsed < max(MIN_UPTIME, C.MIN_CHAIN_SEC):
-            _set_chain("0")
-            log_loop(f"CHUỖI DỪNG CÓ CHỦ ĐÍCH (chạy {int(elapsed)}s < ngưỡng {max(MIN_UPTIME, C.MIN_CHAIN_SEC)}s) "
-                     f"- đây là lỗi thật, fix rồi Run workflow tay.")
+        if elapsed < MIN_UPTIME:
+            log_loop(f"CHUỖI DỪNG (thời gian chạy {int(elapsed)}s < MIN_UPTIME {MIN_UPTIME}s) "
+                     f"- fix rồi Run workflow tay.")
             sys.exit(2)
-        _set_chain("1")
-        log_loop("chain=1 -> step trigger sẽ spawn run kế (kể cả run này có lỗi tạm thời).")
 
 
 if __name__ == "__main__":
