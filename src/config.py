@@ -54,8 +54,8 @@ USAGE_LIMIT_TEXT = ["usage limit", "hết lượt nhập", "đã đạt đến g
 # ALREADY-SELF (ID NÀY ĐÃ NHẬN, code còn hạn cho người khác) -> EMBED XANH + ĐÓNG CẶP.
 ALREADY_SELF_TEXT = ["đã redeem", "đã nhận", "already redeemed", "already claimed"]
 
-FAIL_ALREADY    = ALREADY_SELF_TEXT + USAGE_LIMIT_TEXT   # tương thích ngược
-FAIL_USAGE      = USAGE_LIMIT_TEXT                        # tương thích ngược
+FAIL_ALREADY    = ALREADY_SELF_TEXT + USAGE_LIMIT_TEXT
+FAIL_USAGE      = USAGE_LIMIT_TEXT
 FAIL_NOTEXIST   = ["nhận quà không thành công", "kiểm tra lại mã", "inbox fanpage",
                    "không tồn tại", "vui lòng kiểm tra lại", "code not found"]
 FAIL_IDERROR    = ["không tìm thấy nhân vật", "nhân vật đang offline", "nhập lại id"]
@@ -90,17 +90,6 @@ BARE_ORDER = os.getenv("BARE_ORDER", "newest-first").strip().lower()
 OCR_USE_OEMBED = os.getenv("OCR_USE_OEMBED", "1").strip() != "0"
 
 # ================= COMMUNITY POSTS (tab /posts) =================
-# BẰNG CHỨNG SCHEMA THẬT (F12, tab renderer + backstagePostRenderer):
-#   - tab "Bài đăng" browseEndpoint params = "EgVwb3N0c_IGBAoCSgA%3D" (=%3D -> '=').
-#   - post = sectionListRenderer>itemSectionRenderer>backstagePostThreadRenderer>post>
-#       backstagePostRenderer{ postId, contentText.runs[].text (chứa "MÃ CODE: <MÃ>"),
-#       backstageAttachment.backstageImageRenderer.image.thumbnails[] (ảnh post 1600x1600),
-#       command.browseEndpoint.canonicalBaseUrl = "/post/<postId>" }.
-# -> 3 đường lấy code post (hedged):
-#   (1) STRUCT: document GET /posts -> tách ytInitialData -> _walk_posts.
-#   (2) FLAT: giải mã \\uXXXX cả HTML, chạy thẳng regex "MÃ CODE".
-#   (3) BROWSE FALLBACK: POST /browse với INNERTUBE_PARAMS_POSTS khi document bị consent wall.
-# Post CHỈ lấy code từ text; ảnh post chỉ để LÊN ALERT, KHÔNG OCR (tránh "Mã LIVESTREAM").
 YT_POSTS      = os.getenv("YT_POSTS", "1").strip() != "0"
 YT_POSTS_MAX  = int(os.getenv("YT_POSTS_MAX", "5"))
 INNERTUBE_PARAMS_POSTS = [s.strip() for s in
@@ -117,13 +106,6 @@ CODE_PREFIXES = ["PT"]
 CODE_MIN_LEN  = 6
 
 # ================= OCR: CHUỖI GEMINI (ưu tiên, quay khi 5xx) > EASYOCR > TESSERACT =================
-# GEMINI_MODEL_CHAIN = ưu tiên, KHÔNG phải slug thật. ocr.py GET /v1beta/models của CHÍNH KEY
-#   và chỉ giữ tên NẰM TRONG list -> tên không có bị BỎ + log (không đoán mù, không 404 lặp).
-# TRẦN GỌI: GEMINI_MAX_CALLS = trần MỖI VÒNG LẶP (reset_gemini_budget() gọi từ main.py).
-#   Hết trần = PENDING MEM, KHÔNG dead_key. dead_key chỉ do 402/403/429.
-# NHIỆP 5xx: CẢ chuỗi 5xx -> local thăm dò + chờ GEMINI_BUSY_BACKOFF_SEC rồi Gemini quay lại.
-#   5xx KHÔNG tính tiền (pricing: chỉ 200 mới tính) -> chỉ là chống spam, không phải chống phí.
-# LOCAL_WHEN: "fallback-only" = EasyOCR/Tesseract CHỈ chạy khi Gemini THẬT SỰ không dùng được.
 OCR_MODE        = os.getenv("OCR_MODE", "auto").strip().lower()
 OCR_ENGINE      = os.getenv("OCR_ENGINE", "auto").strip().lower()
 LOCAL_WHEN      = os.getenv("LOCAL_WHEN", "fallback-only").strip().lower()
@@ -153,19 +135,13 @@ MOBILE_UA = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
 
 # ================= DEADLINE TUYỆT ĐỐI (sửa bug "chạy 6h rồi tự ngắt") =================
-# BUG CŨ: while chỉ kiểm tra MAXRUN ở ĐẦU vòng; một vòng có thể kéo 10-15 phút (mỗi ID
-#   ngủ 15-30s × nhiều mã + OCR 180s + Gemini) -> tràn 345' -> đụng timeout-minutes 360
-#   -> GitHub giết job -> step trigger `if: success()` bị bỏ qua -> CHUỖI ĐỨT.
-# SỬA: deadline tính từ LÚC JOB BẮT ĐẦU (JOB_START_EPOCH do workflow ghi), trừ hao cài đặt;
-#   mọi vòng lặp con kiểm tra deadline TRƯỚC mỗi ID/mã/video và TRƯỚC mỗi lần ngủ.
 JOB_START_EPOCH      = float(os.getenv("JOB_START_EPOCH", "0") or 0)
 JOB_TIMEOUT_MINUTES  = int(os.getenv("JOB_TIMEOUT_MINUTES", "360"))
-SHUTDOWN_RESERVE_SEC = float(os.getenv("SHUTDOWN_RESERVE_SEC", "180"))  # commit+push+exit
-LOOP_RESERVE_SEC     = float(os.getenv("LOOP_RESERVE_SEC", "90"))       # dừng nhận việc mới
-TASK_RESERVE_SEC     = float(os.getenv("TASK_RESERVE_SEC", "45"))       # dừng giữa các ID
-MIN_CHAIN_SEC        = int(os.getenv("MIN_CHAIN_SEC", "600"))           # run ngắn hơn -> KHÔNG nối chuỗi
+SHUTDOWN_RESERVE_SEC = float(os.getenv("SHUTDOWN_RESERVE_SEC", "180"))
+LOOP_RESERVE_SEC     = float(os.getenv("LOOP_RESERVE_SEC", "90"))
+TASK_RESERVE_SEC     = float(os.getenv("TASK_RESERVE_SEC", "45"))
 
-DEADLINE_EPOCH = 0.0   # main.py đặt lúc khởi động; 0 = chưa đặt (không giới hạn)
+DEADLINE_EPOCH = 0.0
 
 
 def time_left():
